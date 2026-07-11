@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+revrec.db
+.env
+venv/
+.venv/
+output/

@@ -1,0 +1,552 @@
+"""Deterministic ASC 606 revenue recognition engine.
+
+All classification, allocation, scheduling, journal-entry, and forecast
+logic lives here. It is pure rule-based Python — no AI is involved in any
+number that this module produces. The AI layer (engine/explain.py) only
+explains the output after the fact.
+
+Money is handled internally in integer cents to avoid float drift; all
+public output is in dollars rounded to 2 decimals. Recognition schedules
+are bucketed by calendar month ("YYYY-MM" keys).
+"""
+from __future__ import annotations
+
+import calendar
+from datetime import date
+
+REQUIRED_CONTRACT_FIELDS = (
+    "contract_id", "customer", "start_date", "end_date", "total_price", "deliverables",
+)
+REQUIRED_DELIVERABLE_FIELDS = (
+    "type", "description", "standalone_price_estimate", "delivery_type",
+)
+VALID_DELIVERY_TYPES = ("one_time", "over_time")
+
+
+class ContractValidationError(ValueError):
+    """Raised when an input contract does not match the expected structure."""
+
+
+# ---------------------------------------------------------------------------
+# Month helpers
+# ---------------------------------------------------------------------------
+
+def month_key(date_str: str) -> str:
+    """'2026-03-15' -> '2026-03'."""
+    return date_str[:7]
+
+
+def _month_index(key: str) -> int:
+    y, m = key.split("-")
+    return int(y) * 12 + int(m) - 1
+
+
+def _key_from_index(i: int) -> str:
+    return f"{i // 12:04d}-{i % 12 + 1:02d}"
+
+
+def month_span(start_key: str, end_key: str) -> list[str]:
+    """Inclusive list of month keys from start to end."""
+    return [_key_from_index(i) for i in range(_month_index(start_key), _month_index(end_key) + 1)]
+
+
+def add_months(key: str, n: int) -> str:
+    return _key_from_index(_month_index(key) + n)
+
+
+def month_end(key: str) -> str:
+    """Last calendar day of a month key, as a full date string."""
+    y, m = int(key[:4]), int(key[5:7])
+    return f"{key}-{calendar.monthrange(y, m)[1]:02d}"
+
+
+def _cents(x) -> int:
+    return int(round(float(x) * 100))
+
+
+def _dollars(c: int) -> float:
+    return round(c / 100.0, 2)
+
+
+def _spread(total_cents: int, n: int) -> list[int]:
+    """Split an amount evenly over n periods; rounding residual goes to the last period."""
+    base = total_cents // n
+    out = [base] * n
+    out[-1] += total_cents - base * n
+    return out
+
+
+def _parse_date(s: str) -> date:
+    try:
+        y, m, d = s.split("-")
+        return date(int(y), int(m), int(d))
+    except Exception:
+        raise ContractValidationError(f"Invalid date '{s}' — expected YYYY-MM-DD")
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+def validate_contract(contract: dict) -> None:
+    if not isinstance(contract, dict):
+        raise ContractValidationError("Contract must be a JSON object")
+    for f in REQUIRED_CONTRACT_FIELDS:
+        if f not in contract:
+            raise ContractValidationError(f"Missing required field '{f}'")
+    start = _parse_date(contract["start_date"])
+    end = _parse_date(contract["end_date"])
+    if end < start:
+        raise ContractValidationError("end_date is before start_date")
+    if float(contract["total_price"]) <= 0:
+        raise ContractValidationError("total_price must be positive")
+    delivs = contract["deliverables"]
+    if not isinstance(delivs, list) or not delivs:
+        raise ContractValidationError("deliverables must be a non-empty list")
+    for i, d in enumerate(delivs):
+        for f in REQUIRED_DELIVERABLE_FIELDS:
+            if f not in d:
+                raise ContractValidationError(f"Deliverable {i + 1} missing field '{f}'")
+        if d["delivery_type"] not in VALID_DELIVERY_TYPES:
+            raise ContractValidationError(
+                f"Deliverable {i + 1} has invalid delivery_type '{d['delivery_type']}'"
+            )
+        if float(d["standalone_price_estimate"]) <= 0:
+            raise ContractValidationError(f"Deliverable {i + 1} standalone_price_estimate must be positive")
+    mod = contract.get("modification")
+    if mod is not None:
+        for f in ("date", "description", "added_price", "added_deliverable"):
+            if f not in mod:
+                raise ContractValidationError(f"modification missing field '{f}'")
+        mod_d = _parse_date(mod["date"])
+        if not (start < mod_d <= end):
+            raise ContractValidationError("modification date must fall inside the contract term")
+        if not any(d["delivery_type"] == "over_time" for d in delivs):
+            raise ContractValidationError("modification requires at least one over_time deliverable")
+
+
+# ---------------------------------------------------------------------------
+# Classification + allocation + scheduling (ASC 606 steps 2-5, simplified)
+# ---------------------------------------------------------------------------
+
+def _classify_category(contract: dict) -> str:
+    if contract.get("modification"):
+        return "modification"
+    if contract.get("variable_consideration"):
+        return "variable"
+    if len(contract["deliverables"]) > 1:
+        return "bundled"
+    return "subscription" if contract["deliverables"][0]["delivery_type"] == "over_time" else "one_time"
+
+
+def _allocate(total_cents: int, ssp_cents: list[int]) -> list[int]:
+    """Allocate total price across obligations proportional to standalone prices.
+
+    Rounding residual lands on the last obligation so the allocation always
+    sums exactly to the transaction price.
+    """
+    ssp_total = sum(ssp_cents)
+    allocated, running = [], 0
+    for i, s in enumerate(ssp_cents):
+        if i == len(ssp_cents) - 1:
+            share = total_cents - running
+        else:
+            share = int(round(total_cents * s / ssp_total))
+            running += share
+        allocated.append(share)
+    return allocated
+
+
+def _apply_modification(contract, obligations, schedule, months):
+    """Prospective modification treatment.
+
+    At the modification date, the unrecognized remainder of every over-time
+    obligation plus the added consideration form a blended pool, which is
+    reallocated across the surviving over-time obligations + the new one
+    (weighted by remaining standalone value) and spread evenly over the
+    remaining months. Amounts recognized before the modification are frozen.
+    """
+    mod = contract["modification"]
+    mod_m = month_key(mod["date"])
+    added_cents = _cents(mod["added_price"])
+    remaining_months = [m for m in months if m >= mod_m]
+
+    # Freeze pre-mod entries; pull out the over-time amounts scheduled from
+    # the modification month onward (string compare works for YYYY-MM keys).
+    kept, removed_by_ob = [], {}
+    for e in schedule:
+        if e["method"] == "over_time" and e["month"] >= mod_m:
+            removed_by_ob[e["obligation_id"]] = removed_by_ob.get(e["obligation_id"], 0) + e["amount_cents"]
+        else:
+            kept.append(e)
+
+    recognized_before = {
+        ob["obligation_id"]: ob["allocated_cents"] - removed_by_ob.get(ob["obligation_id"], 0)
+        for ob in obligations if ob["method"] == "over_time"
+    }
+
+    new_d = mod["added_deliverable"]
+    new_ob = {
+        "obligation_id": f"{contract['contract_id']}-OB{len(obligations) + 1}",
+        "type": new_d["type"],
+        "description": new_d["description"],
+        "ssp_cents": _cents(new_d["standalone_price_estimate"]),
+        "method": "point_in_time" if new_d["delivery_type"] == "one_time" else "over_time",
+        "allocated_cents": 0,
+        "added_by_modification": True,
+    }
+    if new_ob["method"] != "over_time":
+        raise ContractValidationError("added_deliverable in a modification must be over_time in this model")
+    obligations.append(new_ob)
+
+    # Blended pool = unrecognized remainder + added price, reallocated by
+    # remaining standalone value (existing obligations prorated for the
+    # portion of the term they have left).
+    pool = sum(removed_by_ob.values()) + added_cents
+    weight_obs = [ob for ob in obligations if ob["method"] == "over_time"]
+    weights = []
+    for ob in weight_obs:
+        if ob.get("added_by_modification"):
+            weights.append(float(ob["ssp_cents"]))
+        else:
+            weights.append(ob["ssp_cents"] * len(remaining_months) / len(months))
+    wsum = sum(weights)
+
+    shares, running = [], 0
+    for i, w in enumerate(weights):
+        if i == len(weights) - 1:
+            share = pool - running
+        else:
+            share = int(round(pool * w / wsum))
+            running += share
+        shares.append(share)
+
+    for ob, share in zip(weight_obs, shares):
+        for m, amt in zip(remaining_months, _spread(share, len(remaining_months))):
+            kept.append({
+                "month": m,
+                "obligation_id": ob["obligation_id"],
+                "amount_cents": amt,
+                "method": "over_time",
+            })
+        if ob.get("added_by_modification"):
+            ob["allocated_cents"] = share
+        else:
+            ob["allocated_cents"] = recognized_before[ob["obligation_id"]] + share
+
+    note = (
+        f"Modified on {mod['date']}: {mod['description']}. Added consideration of "
+        f"${_dollars(added_cents):,.2f} was combined with ${_dollars(pool - added_cents):,.2f} "
+        f"of not-yet-recognized revenue and the blended total of ${_dollars(pool):,.2f} is "
+        f"recognized evenly over the remaining {len(remaining_months)} months "
+        f"({remaining_months[0]} to {remaining_months[-1]}). Revenue recognized before the "
+        f"modification is unchanged (prospective treatment)."
+    )
+    schedule[:] = kept
+    return note
+
+
+def process_contract(contract: dict) -> dict:
+    """Run the full pipeline for one contract. Returns a self-contained dict.
+
+    This function is the single code path for both seed contracts and
+    contracts uploaded later through the dashboard.
+    """
+    validate_contract(contract)
+    cid = contract["contract_id"]
+    total_cents = _cents(contract["total_price"])
+    delivs = contract["deliverables"]
+
+    start_m = month_key(contract["start_date"])
+    end_m = month_key(contract["end_date"])
+    months = month_span(start_m, end_m)
+
+    # Step 2: identify performance obligations. Step 4: allocate price by SSP.
+    ssp_cents = [_cents(d["standalone_price_estimate"]) for d in delivs]
+    allocated = _allocate(total_cents, ssp_cents)
+
+    obligations, schedule = [], []
+    for i, d in enumerate(delivs):
+        method = "point_in_time" if d["delivery_type"] == "one_time" else "over_time"
+        ob = {
+            "obligation_id": f"{cid}-OB{i + 1}",
+            "type": d["type"],
+            "description": d["description"],
+            "ssp_cents": ssp_cents[i],
+            "allocated_cents": allocated[i],
+            "method": method,
+        }
+        obligations.append(ob)
+        # Step 5: recognition schedule.
+        if method == "point_in_time":
+            schedule.append({
+                "month": start_m, "obligation_id": ob["obligation_id"],
+                "amount_cents": allocated[i], "method": "point_in_time",
+            })
+        else:
+            for m, amt in zip(months, _spread(allocated[i], len(months))):
+                schedule.append({
+                    "month": m, "obligation_id": ob["obligation_id"],
+                    "amount_cents": amt, "method": "over_time",
+                })
+
+    modification_note = None
+    if contract.get("modification"):
+        modification_note = _apply_modification(contract, obligations, schedule, months)
+
+    # Variable consideration: usage fees are billed and recognized as incurred
+    # (they never sit in deferred revenue in this simplified model).
+    variable_note = None
+    if contract.get("variable_consideration"):
+        vc = contract["variable_consideration"]
+        for m in sorted(vc.get("monthly_actuals", {})):
+            schedule.append({
+                "month": m, "obligation_id": f"{cid}-USAGE",
+                "amount_cents": _cents(vc["monthly_actuals"][m]), "method": "usage",
+            })
+        variable_note = (
+            f"Variable consideration: {vc.get('description', 'usage-based fees')}. "
+            "Usage fees are billed monthly as incurred and recognized in the month of usage "
+            "— they are excluded from deferred revenue and from the known-revenue (RPO) "
+            "forecast because future usage is not contractually fixed."
+        )
+
+    schedule.sort(key=lambda e: (e["month"], e["obligation_id"]))
+
+    # Journal entries -------------------------------------------------------
+    journal = [{
+        "date": contract["start_date"], "month": start_m, "entry_type": "cash_receipt",
+        "debit_account": "Cash", "credit_account": "Deferred Revenue",
+        "amount_cents": total_cents,
+        "memo": f"{cid} — cash received on contract signing ({contract['customer']})",
+    }]
+    if contract.get("modification"):
+        mod = contract["modification"]
+        journal.append({
+            "date": mod["date"], "month": month_key(mod["date"]), "entry_type": "cash_receipt",
+            "debit_account": "Cash", "credit_account": "Deferred Revenue",
+            "amount_cents": _cents(mod["added_price"]),
+            "memo": f"{cid} — additional cash for contract modification",
+        })
+    for e in schedule:
+        if e["method"] == "usage":
+            journal.append({
+                "date": month_end(e["month"]), "month": e["month"], "entry_type": "usage_billing",
+                "debit_account": "Cash", "credit_account": "Revenue",
+                "amount_cents": e["amount_cents"],
+                "memo": f"{cid} — usage fees billed and recognized for {e['month']}",
+                "obligation_id": e["obligation_id"],
+            })
+        else:
+            entry_date = contract["start_date"] if e["method"] == "point_in_time" else month_end(e["month"])
+            journal.append({
+                "date": entry_date, "month": e["month"], "entry_type": "recognition",
+                "debit_account": "Deferred Revenue", "credit_account": "Revenue",
+                "amount_cents": e["amount_cents"],
+                "memo": f"{cid} — revenue recognized for {e['obligation_id']} ({e['month']})",
+                "obligation_id": e["obligation_id"],
+            })
+    journal.sort(key=lambda j: (j["date"], j["entry_type"] != "cash_receipt"))
+
+    # Deferred revenue table -------------------------------------------------
+    cash_in = {start_m: total_cents}
+    if contract.get("modification"):
+        mm = month_key(contract["modification"]["date"])
+        cash_in[mm] = cash_in.get(mm, 0) + _cents(contract["modification"]["added_price"])
+    recognized_by_month: dict[str, int] = {}
+    for e in schedule:
+        if e["method"] != "usage":
+            recognized_by_month[e["month"]] = recognized_by_month.get(e["month"], 0) + e["amount_cents"]
+
+    dr_table, balance = [], 0
+    for m in months:
+        begin = balance
+        received = cash_in.get(m, 0)
+        recognized = recognized_by_month.get(m, 0)
+        balance = begin + received - recognized
+        dr_table.append({
+            "month": m,
+            "beginning_balance": _dollars(begin),
+            "cash_received": _dollars(received),
+            "revenue_recognized": _dollars(recognized),
+            "ending_balance": _dollars(balance),
+        })
+
+    return {
+        "contract_id": cid,
+        "customer": contract["customer"],
+        "start_date": contract["start_date"],
+        "end_date": contract["end_date"],
+        "total_price": _dollars(total_cents),
+        "category": _classify_category(contract),
+        "term_months": len(months),
+        "obligations": [{
+            "obligation_id": ob["obligation_id"],
+            "type": ob["type"],
+            "description": ob["description"],
+            "standalone_price_estimate": _dollars(ob["ssp_cents"]),
+            "allocated_price": _dollars(ob["allocated_cents"]),
+            "method": ob["method"],
+            "added_by_modification": bool(ob.get("added_by_modification")),
+        } for ob in obligations],
+        "schedule": [{
+            "month": e["month"], "obligation_id": e["obligation_id"],
+            "amount": _dollars(e["amount_cents"]), "method": e["method"],
+        } for e in schedule],
+        "journal_entries": [{
+            "date": j["date"], "month": j["month"], "entry_type": j["entry_type"],
+            "debit_account": j["debit_account"], "credit_account": j["credit_account"],
+            "amount": _dollars(j["amount_cents"]), "memo": j["memo"],
+            "obligation_id": j.get("obligation_id"),
+        } for j in journal],
+        "deferred_revenue": dr_table,
+        "modification_note": modification_note,
+        "variable_note": variable_note,
+        "rationales": {},  # filled by engine.explain
+    }
+
+
+# ---------------------------------------------------------------------------
+# Aggregations — these operate on already-processed contracts, so adding a
+# new contract never requires reprocessing the existing ones (the per-contract
+# results are cached and the roll-ups below just sum the cached series).
+# ---------------------------------------------------------------------------
+
+def _all_months(processed_list) -> list[str]:
+    keys = set()
+    for p in processed_list:
+        for row in p["deferred_revenue"]:
+            keys.add(row["month"])
+        for e in p["schedule"]:
+            keys.add(e["month"])
+    if not keys:
+        return []
+    return month_span(min(keys), max(keys))
+
+
+def aggregate_deferred_revenue(processed_list) -> list[dict]:
+    """Total deferred revenue liability by month across all contracts."""
+    months = _all_months(processed_list)
+    out = []
+    for m in months:
+        total = 0.0
+        for p in processed_list:
+            rows = p["deferred_revenue"]
+            if not rows or m < rows[0]["month"]:
+                continue  # contract not signed yet
+            if m > rows[-1]["month"]:
+                total += rows[-1]["ending_balance"]  # 0 once fully recognized
+                continue
+            for row in rows:
+                if row["month"] == m:
+                    total += row["ending_balance"]
+                    break
+        out.append({"month": m, "deferred_revenue": round(total, 2)})
+    return out
+
+
+def aggregate_recognized_by_method(processed_list) -> list[dict]:
+    """Revenue recognized per month, split point-in-time vs over-time vs usage."""
+    months = _all_months(processed_list)
+    buckets = {m: {"point_in_time": 0.0, "over_time": 0.0, "usage": 0.0} for m in months}
+    for p in processed_list:
+        for e in p["schedule"]:
+            buckets[e["month"]][e["method"]] += e["amount"]
+    return [{
+        "month": m,
+        "point_in_time": round(buckets[m]["point_in_time"], 2),
+        "over_time": round(buckets[m]["over_time"], 2),
+        "usage": round(buckets[m]["usage"], 2),
+    } for m in months]
+
+
+def month_end_close_batch(processed_list, close_month: str) -> dict:
+    """Generate the full batch of entries that should post in a given month,
+    plus control flags for contracts where recognition looks wrong.
+
+    This is the automation story: nobody looks up per-contract amounts by
+    hand — every active contract's entry for the month is generated from its
+    stored schedule, and the control check flags anything that should have
+    recognized but didn't (or should be done but still carries a balance).
+    """
+    entries, flags = [], []
+    for p in processed_list:
+        for j in p["journal_entries"]:
+            if j["month"] == close_month and j["entry_type"] in ("recognition", "usage_billing"):
+                entries.append({**j, "contract_id": p["contract_id"], "customer": p["customer"]})
+
+        start_m, end_m = month_key(p["start_date"]), month_key(p["end_date"])
+        final_balance = p["deferred_revenue"][-1]["ending_balance"] if p["deferred_revenue"] else 0.0
+
+        # Control 1: contract term is over but deferred revenue remains.
+        if close_month > end_m and final_balance > 0.005:
+            flags.append({
+                "contract_id": p["contract_id"], "severity": "error",
+                "message": (
+                    f"Contract ended {p['end_date']} but still carries a deferred revenue "
+                    f"balance of ${final_balance:,.2f} — recognition appears incomplete."
+                ),
+            })
+
+        # Control 2: contract is active with over-time obligations but no
+        # recognition entry was generated for this month.
+        has_over_time = any(ob["method"] == "over_time" for ob in p["obligations"])
+        if has_over_time and start_m <= close_month <= end_m:
+            if not any(e["contract_id"] == p["contract_id"] and e["entry_type"] == "recognition"
+                       for e in entries):
+                flags.append({
+                    "contract_id": p["contract_id"], "severity": "error",
+                    "message": (
+                        f"Active over-time contract has no recognition entry for {close_month} — "
+                        "the monthly entry may have been missed."
+                    ),
+                })
+
+    entries.sort(key=lambda e: (e["contract_id"], e["obligation_id"] or ""))
+    return {
+        "close_month": close_month,
+        "entries": entries,
+        "entry_count": len(entries),
+        "total_recognized": round(sum(e["amount"] for e in entries if e["entry_type"] == "recognition"), 2),
+        "total_usage_billed": round(sum(e["amount"] for e in entries if e["entry_type"] == "usage_billing"), 2),
+        "flags": flags,
+    }
+
+
+def rpo_forecast(processed_list, from_month: str, num_months: int = 12) -> dict:
+    """Known contracted revenue by future month (Remaining Performance Obligations).
+
+    Derived entirely from existing recognition schedules — zero new
+    assumptions. Explicitly EXCLUDES new sales, renewals, pipeline, and
+    variable/usage revenue (future usage is not contractually fixed).
+    """
+    window = [add_months(from_month, i) for i in range(num_months)]
+    totals = {m: 0.0 for m in window}
+    by_contract: dict[str, dict] = {}
+    for p in processed_list:
+        contrib = {m: 0.0 for m in window}
+        for e in p["schedule"]:
+            if e["method"] == "usage":
+                continue
+            if e["month"] in totals:
+                totals[e["month"]] += e["amount"]
+                contrib[e["month"]] += e["amount"]
+        if any(v > 0 for v in contrib.values()):
+            by_contract[p["contract_id"]] = {
+                "customer": p["customer"],
+                "monthly": {m: round(v, 2) for m, v in contrib.items() if v > 0},
+                "total": round(sum(contrib.values()), 2),
+            }
+    return {
+        "from_month": from_month,
+        "months": window,
+        "monthly_totals": [{"month": m, "known_revenue": round(totals[m], 2)} for m in window],
+        "total_known_revenue": round(sum(totals.values()), 2),
+        "by_contract": by_contract,
+        "disclaimer": (
+            "Known revenue from existing contracts only (Remaining Performance Obligations). "
+            "Excludes new sales, renewals, pipeline, and variable/usage fees. A total revenue "
+            "forecast would require separate assumptions (e.g. new bookings x close rate) and "
+            "must not be blended into this number."
+        ),
+    }

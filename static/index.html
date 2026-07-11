@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ASC 606 Revenue Recognition Engine</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    /* Clean, light palette in the spirit of ramp.com: warm off-white page,
+       white cards, near-black ink, lime accent used sparingly. */
+    --bg: #faf9f6; --panel: #ffffff; --panel2: #f4f3ee; --border: #e6e4dd;
+    --text: #1a1a1a; --muted: #6f6d66; --ink: #1a1a1a;
+    --lime: #d3f26a; --lime-soft: #eef9d3; --green: #1e7a4d;
+    --amber: #b45309; --amber-soft: #fdf0d9; --red: #b3372f; --red-soft: #fbe4e1;
+    --violet: #5b4bb5; --violet-soft: #eceafa; --blue: #2563eb; --blue-soft: #e3ecfc;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; padding: 24px; }
+  h1 { font-size: 22px; letter-spacing: -0.01em; } h2 { font-size: 16px; margin-bottom: 12px; }
+  .sub { color: var(--muted); margin: 4px 0 20px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  @media (max-width: 1000px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px;
+          box-shadow: 0 1px 2px rgba(26,26,26,.04); }
+  .card.full { grid-column: 1 / -1; }
+  .kpis { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+  .kpi { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px 18px;
+         min-width: 170px; box-shadow: 0 1px 2px rgba(26,26,26,.04); }
+  .kpi .v { font-size: 20px; font-weight: 700; color: var(--ink); }
+  .kpi .l { color: var(--muted); font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.clickable { cursor: pointer; }
+  tr.clickable:hover { background: var(--panel2); }
+  tr.selected { background: var(--lime-soft); outline: 1px solid var(--ink); }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .badge.one_time { background: var(--blue-soft); color: var(--blue); }
+  .badge.subscription { background: var(--lime-soft); color: var(--green); }
+  .badge.bundled { background: var(--violet-soft); color: var(--violet); }
+  .badge.modification { background: var(--amber-soft); color: var(--amber); }
+  .badge.variable { background: var(--red-soft); color: var(--red); }
+  .filters button, .controls button, .controls select, .controls input {
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 5px 12px; font-size: 13px; cursor: pointer;
+  }
+  .filters button.active { background: var(--ink); border-color: var(--ink); color: var(--lime); }
+  #uploadBtn { background: var(--ink); color: var(--lime); border-color: var(--ink); font-weight: 600; }
+  #runClose { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  #detail { display: none; }
+  #detail.open { display: block; }
+  .note { background: var(--amber-soft); border-left: 3px solid var(--amber); padding: 8px 12px; border-radius: 0 8px 8px 0; margin: 8px 0; font-size: 13px; }
+  .rationale { background: var(--panel2); border-left: 3px solid var(--ink); padding: 8px 12px; border-radius: 0 8px 8px 0; margin: 6px 0; font-size: 13px; }
+  .rationale .src { color: var(--muted); font-size: 11px; }
+  .flag { background: var(--red-soft); border-left: 3px solid var(--red); padding: 8px 12px; border-radius: 0 8px 8px 0; margin: 6px 0; font-size: 13px; }
+  .ok { color: var(--green); font-size: 13px; }
+  .disclaimer { color: var(--muted); font-size: 12px; margin-top: 8px; font-style: italic; }
+  #uploadStatus { font-size: 13px; }
+  #uploadStatus.err { color: var(--red); } #uploadStatus.ok { color: var(--green); }
+  .scroll { max-height: 420px; overflow-y: auto; }
+  .chartbox { position: relative; height: 300px; }
+</style>
+</head>
+<body>
+
+<h1>ASC 606 Revenue Recognition Engine</h1>
+<p class="sub">Deterministic rev rec for 20+ mock B2B contracts — obligations, price allocation, journal entries,
+deferred revenue, automated month-end close, and known-revenue forecast. AI explains the output; rules make the decisions.</p>
+
+<div class="kpis" id="kpis"></div>
+
+<div class="grid">
+  <div class="card full">
+    <h2>Total deferred revenue balance (balance sheet liability, all contracts)</h2>
+    <div class="chartbox"><canvas id="drChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>Revenue recognized by month — point-in-time vs over-time vs usage</h2>
+    <div class="chartbox"><canvas id="methodChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>Known revenue forecast — contracted only (RPO)</h2>
+    <div class="chartbox"><canvas id="rpoChart"></canvas></div>
+    <p class="disclaimer" id="rpoDisclaimer"></p>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card full">
+    <div class="controls">
+      <h2 style="margin:0; flex:1;">Month-end close batch</h2>
+      <label for="closeMonth" style="color:var(--muted)">Close month:</label>
+      <input type="month" id="closeMonth">
+      <button id="runClose">Generate batch</button>
+    </div>
+    <div id="closeSummary" class="sub"></div>
+    <div id="closeFlags"></div>
+    <div class="scroll"><table id="closeTable">
+      <thead><tr><th>Contract</th><th>Customer</th><th>Date</th><th>Debit</th><th>Credit</th><th class="num">Amount</th><th>Memo</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card full">
+    <div class="controls">
+      <h2 style="margin:0; flex:1;">Contracts</h2>
+      <div class="filters" id="filters">
+        <button data-f="all" class="active">All</button>
+        <button data-f="one_time">One-time</button>
+        <button data-f="subscription">Subscription</button>
+        <button data-f="bundled">Bundled</button>
+        <button data-f="modification">⚠ Modified</button>
+        <button data-f="variable">≈ Variable</button>
+      </div>
+      <input type="file" id="uploadFile" accept=".json" style="display:none">
+      <button id="uploadBtn">⬆ Upload contract (JSON)</button>
+      <span id="uploadStatus"></span>
+    </div>
+    <div class="scroll"><table id="contractTable">
+      <thead><tr>
+        <th>ID</th><th>Customer</th><th>Category</th><th>Term</th>
+        <th class="num">Total price</th><th class="num">Obligations</th><th>Methods</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </div>
+
+  <div class="card full" id="detail">
+    <h2 id="detailTitle"></h2>
+    <div id="detailBody"></div>
+  </div>
+</div>
+
+<script>
+const fmt = n => "$" + n.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const fmt0 = n => "$" + Math.round(n).toLocaleString("en-US");
+let contracts = [], filter = "all", selectedId = null;
+let drChart, methodChart, rpoChart;
+
+Chart.defaults.color = "#6f6d66";
+Chart.defaults.borderColor = "#e6e4dd";
+
+async function getJSON(url) { const r = await fetch(url); if (!r.ok) throw new Error(await r.text()); return r.json(); }
+
+async function loadAll() {
+  const [c, agg, rpo] = await Promise.all([
+    getJSON("/api/contracts"), getJSON("/api/aggregates"), getJSON("/api/forecast?months=12"),
+  ]);
+  contracts = c.contracts;
+  renderKPIs(agg, rpo);
+  renderDR(agg.deferred_revenue);
+  renderMethod(agg.recognized_by_method);
+  renderRPO(rpo);
+  renderTable();
+  if (selectedId) { const p = contracts.find(x => x.contract_id === selectedId); if (p) renderDetail(p); }
+}
+
+function renderKPIs(agg, rpo) {
+  const now = new Date().toISOString().slice(0, 7);
+  const cur = agg.deferred_revenue.find(r => r.month === now) || agg.deferred_revenue.at(-1);
+  document.getElementById("kpis").innerHTML = `
+    <div class="kpi"><div class="v">${agg.contract_count}</div><div class="l">contracts</div></div>
+    <div class="kpi"><div class="v">${fmt0(cur ? cur.deferred_revenue : 0)}</div><div class="l">deferred revenue — ${cur ? cur.month : "n/a"}</div></div>
+    <div class="kpi"><div class="v">${fmt0(rpo.total_known_revenue)}</div><div class="l">known revenue, next 12 mo (RPO)</div></div>`;
+}
+
+function renderDR(series) {
+  if (drChart) drChart.destroy();
+  drChart = new Chart(document.getElementById("drChart"), {
+    type: "line",
+    data: { labels: series.map(r => r.month), datasets: [{
+      label: "Deferred revenue", data: series.map(r => r.deferred_revenue),
+      borderColor: "#1a1a1a", backgroundColor: "rgba(211,242,106,.45)", fill: true, tension: .25, pointRadius: 2,
+    }]},
+    options: { maintainAspectRatio: false, plugins: { legend: { display: false } },
+      scales: { y: { ticks: { callback: v => fmt0(v) } } } },
+  });
+}
+
+function renderMethod(series) {
+  if (methodChart) methodChart.destroy();
+  methodChart = new Chart(document.getElementById("methodChart"), {
+    type: "bar",
+    data: { labels: series.map(r => r.month), datasets: [
+      { label: "Point-in-time", data: series.map(r => r.point_in_time), backgroundColor: "#1a1a1a" },
+      { label: "Over-time", data: series.map(r => r.over_time), backgroundColor: "#c9e85c" },
+      { label: "Usage (variable)", data: series.map(r => r.usage), backgroundColor: "#e0907f" },
+    ]},
+    options: { maintainAspectRatio: false,
+      scales: { x: { stacked: true }, y: { stacked: true, ticks: { callback: v => fmt0(v) } } } },
+  });
+}
+
+function renderRPO(rpo) {
+  document.getElementById("rpoDisclaimer").textContent = rpo.disclaimer;
+  if (rpoChart) rpoChart.destroy();
+  rpoChart = new Chart(document.getElementById("rpoChart"), {
+    type: "line",
+    data: { labels: rpo.monthly_totals.map(r => r.month), datasets: [{
+      label: "Known contracted revenue", data: rpo.monthly_totals.map(r => r.known_revenue),
+      borderColor: "#1e7a4d", backgroundColor: "rgba(30,122,77,.12)", fill: true, tension: .25, pointRadius: 2,
+    }]},
+    options: { maintainAspectRatio: false, plugins: { legend: { display: false } },
+      scales: { y: { ticks: { callback: v => fmt0(v) } } } },
+  });
+}
+
+const BADGE_LABEL = { one_time: "one-time", subscription: "subscription", bundled: "bundled",
+                      modification: "⚠ modified", variable: "≈ variable" };
+
+function renderTable() {
+  const tbody = document.querySelector("#contractTable tbody");
+  const rows = contracts.filter(p => filter === "all" || p.category === filter);
+  tbody.innerHTML = rows.map(p => `
+    <tr class="clickable ${p.contract_id === selectedId ? "selected" : ""}" data-id="${p.contract_id}">
+      <td>${p.contract_id}</td><td>${p.customer}</td>
+      <td><span class="badge ${p.category}">${BADGE_LABEL[p.category]}</span></td>
+      <td>${p.start_date} → ${p.end_date}</td>
+      <td class="num">${fmt(p.total_price)}</td>
+      <td class="num">${p.obligations.length}</td>
+      <td>${[...new Set(p.obligations.map(o => o.method === "point_in_time" ? "PIT" : "OT"))].join(" + ")}${p.variable_note ? " + usage" : ""}</td>
+    </tr>`).join("");
+  tbody.querySelectorAll("tr").forEach(tr => tr.addEventListener("click", () => {
+    selectedId = tr.dataset.id;
+    renderDetail(contracts.find(p => p.contract_id === selectedId));
+    renderTable();
+  }));
+}
+
+function renderDetail(p) {
+  const el = document.getElementById("detail");
+  el.classList.add("open");
+  document.getElementById("detailTitle").textContent =
+    `${p.contract_id} — ${p.customer} (${p.start_date} → ${p.end_date}, ${fmt(p.total_price)})`;
+  let html = `
+    <h3 style="margin:8px 0">Performance obligations & price allocation</h3>
+    <table><thead><tr><th>Obligation</th><th>Type</th><th>Method</th>
+      <th class="num">Standalone price</th><th class="num">Allocated price</th></tr></thead><tbody>
+    ${p.obligations.map(o => `<tr>
+      <td>${o.obligation_id}${o.added_by_modification ? ' <span class="badge modification">added by mod</span>' : ""}</td>
+      <td>${o.type}</td><td>${o.method}</td>
+      <td class="num">${fmt(o.standalone_price_estimate)}</td>
+      <td class="num">${fmt(o.allocated_price)}</td></tr>`).join("")}
+    </tbody></table>`;
+  html += p.obligations.map(o => {
+    const r = p.rationales[o.obligation_id];
+    return r ? `<div class="rationale"><b>${o.obligation_id}</b> — ${r.text}
+      <div class="src">rationale source: ${r.source}</div></div>` : "";
+  }).join("");
+  if (p.modification_note) html += `<div class="note">⚠ ${p.modification_note}</div>`;
+  if (p.variable_note) html += `<div class="note">≈ ${p.variable_note}</div>`;
+  html += `
+    <h3 style="margin:14px 0 8px">Deferred revenue by month</h3>
+    <div class="scroll"><table><thead><tr><th>Month</th><th class="num">Beginning</th>
+      <th class="num">Cash received</th><th class="num">Recognized</th><th class="num">Ending</th></tr></thead><tbody>
+    ${p.deferred_revenue.map(r => `<tr><td>${r.month}</td>
+      <td class="num">${fmt(r.beginning_balance)}</td><td class="num">${fmt(r.cash_received)}</td>
+      <td class="num">${fmt(r.revenue_recognized)}</td><td class="num">${fmt(r.ending_balance)}</td></tr>`).join("")}
+    </tbody></table></div>
+    <h3 style="margin:14px 0 8px">Journal entries</h3>
+    <div class="scroll"><table><thead><tr><th>Date</th><th>Type</th><th>Debit</th><th>Credit</th>
+      <th class="num">Amount</th><th>Memo</th></tr></thead><tbody>
+    ${p.journal_entries.map(j => `<tr><td>${j.date}</td><td>${j.entry_type}</td>
+      <td>${j.debit_account}</td><td>${j.credit_account}</td>
+      <td class="num">${fmt(j.amount)}</td><td>${j.memo}</td></tr>`).join("")}
+    </tbody></table></div>`;
+  document.getElementById("detailBody").innerHTML = html;
+  el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+async function runClose() {
+  const month = document.getElementById("closeMonth").value;
+  const batch = await getJSON(`/api/close-batch?month=${month}`);
+  document.getElementById("closeSummary").textContent =
+    `${batch.entry_count} entries for ${batch.close_month} — ${fmt(batch.total_recognized)} recognized from deferred revenue` +
+    (batch.total_usage_billed ? `, ${fmt(batch.total_usage_billed)} usage billed` : "") +
+    ". Generated from stored schedules — no per-contract lookup required.";
+  document.getElementById("closeFlags").innerHTML = batch.flags.length
+    ? batch.flags.map(f => `<div class="flag"><b>${f.contract_id}</b> — ${f.message}</div>`).join("")
+    : `<div class="ok">✓ Control check passed — no contracts with missed or incomplete recognition.</div>`;
+  document.querySelector("#closeTable tbody").innerHTML = batch.entries.map(e => `
+    <tr><td>${e.contract_id}</td><td>${e.customer}</td><td>${e.date}</td>
+      <td>${e.debit_account}</td><td>${e.credit_account}</td>
+      <td class="num">${fmt(e.amount)}</td><td>${e.memo}</td></tr>`).join("");
+}
+
+document.getElementById("filters").addEventListener("click", e => {
+  if (e.target.tagName !== "BUTTON") return;
+  filter = e.target.dataset.f;
+  document.querySelectorAll("#filters button").forEach(b => b.classList.toggle("active", b === e.target));
+  renderTable();
+});
+
+document.getElementById("uploadBtn").addEventListener("click", () => document.getElementById("uploadFile").click());
+document.getElementById("uploadFile").addEventListener("change", async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const status = document.getElementById("uploadStatus");
+  status.className = ""; status.textContent = "Processing…";
+  try {
+    const body = await file.text();
+    JSON.parse(body); // fail fast on invalid JSON
+    const r = await fetch("/api/contracts", { method: "POST", headers: { "Content-Type": "application/json" }, body });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    status.className = "ok";
+    status.textContent = `✓ ${data.contract_id} added — charts, close batch, and forecast updated.`;
+    selectedId = data.contract_id;
+    await loadAll();
+  } catch (err) {
+    status.className = "err"; status.textContent = "✗ " + err.message;
+  }
+  e.target.value = "";
+});
+document.getElementById("runClose").addEventListener("click", runClose);
+
+(async () => {
+  document.getElementById("closeMonth").value = new Date().toISOString().slice(0, 7);
+  await loadAll();
+  await runClose();
+})();
+</script>
+</body>
+</html>
