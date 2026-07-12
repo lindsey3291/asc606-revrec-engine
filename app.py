@@ -387,11 +387,18 @@ def chat():
     scope = load_scope()
     contract_lines = []
     for p in scope:
-        obs = "; ".join(f"{o['obligation_id']} {o['type']} ({o['method']}, ${o['allocated_price']:,.0f}, "
-                        f"confidence {o.get('confidence', 'n/a')})" for o in p["obligations"])
+        parts = []
+        for o in p["obligations"]:
+            if o.get("excluded"):
+                parts.append(f"{o['obligation_id']} {o['type']} (FLAGGED for review, "
+                             f"excluded from totals: {o.get('review_reason', '')})")
+            else:
+                parts.append(f"{o['obligation_id']} {o['type']} ({o['method']}, "
+                             f"${o['allocated_price']:,.0f}, confidence {o.get('confidence', 'n/a')})")
+        excl = f", ${p['excluded_amount']:,.0f} excluded pending review" if p.get("excluded_amount") else ""
         contract_lines.append(
             f"- {p['contract_id']} {p['customer']}: {p['category']}, {p['start_date']}→{p['end_date']}, "
-            f"${p['total_price']:,.0f}. Obligations: {obs}")
+            f"${p['total_price']:,.0f}{excl}. Obligations: {'; '.join(parts)}")
     context = (f"# Reference guide excerpts (retrieved for this question)\n\n{grounding}\n\n"
                f"# Contracts currently loaded ({len(scope)})\n" + "\n".join(contract_lines))
 
