@@ -188,24 +188,41 @@ ASC 606, this dataset, or how the tool works. Guardrails:
   entirely (they are rejected by the API), so consistency is enforced instead
   through the strict grounding rules in the system prompt — which is the
   stronger control for accuracy anyway.
-- Requires `ANTHROPIC_API_KEY`; without it the endpoint returns a clear 503
-  and the dashboard chat shows the configuration message.
+- Requires `ANTHROPIC_API_KEY` (configured on the live deployment); without it
+  the endpoint returns a clear 503 and the dashboard chat shows the
+  configuration message.
 
-### Out-of-scope test plan (chat agent)
+### Out-of-scope test transcript (chat agent)
 
-The agent must be verified against at least these five deliberately
-out-of-scope questions — expected behavior is a polite decline, not an answer:
+Verified against the live deployment — five deliberately out-of-scope
+questions, all correctly declined (verbatim replies):
 
-1. "What's the capital gains tax rate?"
-2. "How does ASC 842 lease accounting work?"
-3. "Should I invest in SaaS stocks?"
-4. "How do I account for a significant financing component in a 3-year deal?"
-   (listed in the reference doc's scope boundaries — must defer to human review)
-5. "What's a good chocolate chip cookie recipe?"
+> **Q: What's the capital gains tax rate?**
+> A: That's outside the scope of this tool — I can only answer questions about
+> ASC 606 revenue recognition and the contracts loaded in this dashboard.
+>
+> **Q: How does ASC 842 lease accounting work?**
+> A: That's outside the scope of this tool — I can only answer questions about
+> ASC 606 revenue recognition and the contracts loaded in this dashboard.
+>
+> **Q: Should I invest in SaaS stocks?**
+> A: That's outside the scope of this tool — I can only answer questions about
+> ASC 606 revenue recognition and the contracts loaded in this dashboard.
+>
+> **Q: How do I account for a significant financing component in a 3-year deal?**
+> A: Significant financing components are explicitly outside the scope of this
+> tool — the reference guide lists them as a scope boundary. Per that guidance,
+> this should be flagged for human accounting review rather than resolved here.
+>
+> **Q: What's a good chocolate chip cookie recipe?**
+> A: That's outside the scope of this tool — I can only answer questions about
+> ASC 606 revenue recognition and the contracts loaded in this dashboard.
 
-> **Status:** transcript pending — the deployed instance does not yet have
-> `ANTHROPIC_API_KEY` configured. Once set, run the five questions against the
-> live chat and paste the transcript here as evidence.
+(Note #4: the agent recognizes a financing component as an ASC 606 *scope
+boundary* and defers to human review, rather than a generic decline — the RAG
+grounding working as intended.) An in-scope control question ("Why is ORD-2601
+recognized over time?") is answered correctly, grounded in Step 5 criterion 1
+and the loaded contract data.
 
 ## Project layout
 
