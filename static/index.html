@@ -62,6 +62,19 @@
   #uploadStatus.err { color: var(--red); } #uploadStatus.ok { color: var(--green); }
   .scroll { max-height: 420px; overflow-y: auto; }
   .chartbox { position: relative; height: 300px; }
+  .chip { display: inline-block; padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 600; margin-left: 6px; }
+  .chip.high { background: var(--lime-soft); color: var(--green); }
+  .chip.medium { background: var(--amber-soft); color: var(--amber); }
+  .chip.low { background: var(--red-soft); color: var(--red); }
+  .cite { color: var(--muted); font-size: 12px; margin-top: 3px; }
+  #chatLog { max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+  .msg { max-width: 85%; padding: 8px 12px; border-radius: 10px; font-size: 13px; white-space: pre-wrap; }
+  .msg.user { align-self: flex-end; background: var(--ink); color: #fff; }
+  .msg.bot { align-self: flex-start; background: var(--panel2); border: 1px solid var(--border); }
+  .msg.bot .cite { margin-top: 6px; }
+  #chatForm { display: flex; gap: 8px; }
+  #chatInput { flex: 1; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 13px; }
+  #chatSend { background: var(--ink); color: var(--lime); border: 1px solid var(--ink); border-radius: 8px; padding: 8px 16px; font-weight: 600; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -108,6 +121,14 @@ journal entries, deferred revenue, automated month-end close, and known-revenue 
 
 <div class="grid">
   <div class="card full">
+    <h2>Needs Review</h2>
+    <p class="sub" style="margin-bottom:8px">Obligations whose descriptions don't map cleanly to the reference guide's criteria — or that touch an out-of-scope area — are flagged here for human review instead of being silently auto-processed.</p>
+    <div id="reviewList"></div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card full">
     <div class="controls">
       <h2 style="margin:0; flex:1;">Contracts</h2>
       <div class="filters" id="filters">
@@ -138,6 +159,18 @@ journal entries, deferred revenue, automated month-end close, and known-revenue 
   </div>
 </div>
 
+<div class="grid">
+  <div class="card full">
+    <h2>Ask About ASC 606 or This Data</h2>
+    <p class="sub" style="margin-bottom:8px">Answers are grounded in the ASC 606 reference guide and the contracts loaded above — questions outside that scope are declined by design.</p>
+    <div id="chatLog"></div>
+    <form id="chatForm">
+      <input id="chatInput" type="text" maxlength="2000" placeholder="e.g. Why is C-013's license point-in-time but its support over-time?" autocomplete="off">
+      <button id="chatSend" type="submit">Send</button>
+    </form>
+  </div>
+</div>
+
 <script>
 const fmt = n => "$" + n.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const fmt0 = n => "$" + Math.round(n).toLocaleString("en-US");
@@ -159,6 +192,7 @@ async function loadAll() {
   renderMethod(agg.recognized_by_method);
   renderRPO(rpo);
   renderTable();
+  renderReview();
   if (selectedId) { const p = contracts.find(x => x.contract_id === selectedId); if (p) renderDetail(p); }
 }
 
@@ -234,6 +268,14 @@ function renderTable() {
   }));
 }
 
+function renderReview() {
+  const items = contracts.flatMap(p =>
+    (p.needs_review || []).map(r => ({ ...r, contract_id: p.contract_id, customer: p.customer })));
+  document.getElementById("reviewList").innerHTML = items.length
+    ? items.map(r => `<div class="flag"><b>${r.contract_id}</b> (${r.customer}) — ${r.obligation_id}, ${r.type}: ${r.reason}</div>`).join("")
+    : `<div class="ok">✓ All obligations classified with sufficient confidence — nothing is awaiting review.</div>`;
+}
+
 function renderDetail(p) {
   const el = document.getElementById("detail");
   el.classList.add("open");
@@ -251,8 +293,11 @@ function renderDetail(p) {
     </tbody></table>`;
   html += p.obligations.map(o => {
     const r = p.rationales[o.obligation_id];
-    return r ? `<div class="rationale"><b>${o.obligation_id}</b> — ${r.text}
-      <div class="src">Rationale source: ${r.source}</div></div>` : "";
+    if (!r) return "";
+    const conf = r.confidence ? `<span class="chip ${r.confidence}">${r.confidence} confidence</span>` : "";
+    const cite = r.rule_citation ? `<div class="cite">Rule applied: ${r.rule_citation}</div>` : "";
+    return `<div class="rationale"><b>${o.obligation_id}</b>${conf} — ${r.text}${cite}
+      <div class="src">Rationale source: ${r.source}</div></div>`;
   }).join("");
   if (p.modification_note) html += `<div class="note">⚠ ${p.modification_note}</div>`;
   if (p.variable_note) html += `<div class="note">≈ ${p.variable_note}</div>`;
@@ -324,6 +369,48 @@ document.getElementById("runClose").addEventListener("click", runClose);
 document.getElementById("downloadCsv").addEventListener("click", () => {
   const month = document.getElementById("closeMonth").value;
   window.location.href = `/api/close-batch.csv?month=${month}`;
+});
+
+// --- Scoped chat agent ---
+const chatHistory = [];
+function addMsg(role, text, sections) {
+  const log = document.getElementById("chatLog");
+  const div = document.createElement("div");
+  div.className = `msg ${role === "user" ? "user" : "bot"}`;
+  div.textContent = text;
+  if (sections && sections.length) {
+    const cite = document.createElement("div");
+    cite.className = "cite";
+    cite.textContent = "Grounded in: " + sections.join(" · ");
+    div.appendChild(cite);
+  }
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+document.getElementById("chatForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const input = document.getElementById("chatInput");
+  const message = input.value.trim();
+  if (!message) return;
+  input.value = "";
+  addMsg("user", message);
+  const thinking = document.createElement("div");
+  thinking.className = "msg bot"; thinking.textContent = "…";
+  document.getElementById("chatLog").appendChild(thinking);
+  try {
+    const r = await fetch("/api/chat", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, history: chatHistory.slice(-8) }),
+    });
+    const data = await r.json();
+    thinking.remove();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    addMsg("assistant", data.reply, data.retrieved_sections);
+    chatHistory.push({ role: "user", content: message }, { role: "assistant", content: data.reply });
+  } catch (err) {
+    thinking.remove();
+    addMsg("assistant", "⚠ " + err.message);
+  }
 });
 
 (async () => {

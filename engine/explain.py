@@ -1,88 +1,224 @@
-"""AI explanation layer.
+"""AI explanation layer — RAG-grounded against the ASC 606 reference doc.
 
-Generates a 1-2 sentence plain-English rationale for each performance
-obligation: why it was classified point-in-time vs over-time and why the
-price allocation came out the way it did.
+Three responsibilities, all strictly AFTER engine/core.py has produced the
+numbers (the AI explains output; it never makes classification decisions):
 
-IMPORTANT SEPARATION OF CONCERNS: this module runs strictly AFTER
-engine/core.py has produced the numbers. The AI explains the output — it
-never makes or influences a classification or allocation decision. If the
-Claude API is unavailable (no ANTHROPIC_API_KEY, no network), a
-deterministic template rationale is used instead so the tool still runs
-end-to-end; each rationale is tagged with its source.
+1. RATIONALES — a 1-2 sentence explanation per obligation, grounded in the
+   most relevant section of data/asc606_reference_doc.md and citing the
+   specific rule applied (e.g. "over time under criterion 1"). When the
+   Claude API is available the model writes the prose from retrieved
+   sections; otherwise a deterministic template — which cites the same
+   sections — is used. Every rationale is tagged with its source.
+
+2. CONFIDENCE (high/medium/low) — how cleanly each deliverable's description
+   maps to the reference doc's distinctness (Step 2) and over-time (Step 5)
+   criteria. A deterministic keyword heuristic always runs (so behavior is
+   identical with or without an API key); low-confidence items surface in
+   the dashboard's "Needs Review" section instead of being silently
+   auto-processed.
+
+3. SCOPE FLAGS — if a deliverable touches an area the reference doc lists
+   as explicitly out of scope (financing components, principal vs. agent,
+   multi-currency, leases, ...), it is flagged for human review rather than
+   confidently classified.
 """
 from __future__ import annotations
 
 import json
 import os
+import re
+
+from engine.rag import get_doc
 
 MODEL = "claude-opus-4-8"
 
+# ---------------------------------------------------------------------------
+# Deterministic confidence heuristic + out-of-scope detection
+# ---------------------------------------------------------------------------
+
+# Vocabulary that cleanly matches the reference doc's Step 5 discussion.
+_OVER_TIME_WORDS = {"subscription", "support", "maintenance", "hosting", "access",
+                    "saas", "platform", "monthly", "service", "sla", "module", "addon"}
+_POINT_IN_TIME_WORDS = {"hardware", "terminal", "device", "license", "perpetual",
+                        "delivered", "delivery", "migration", "setup", "installation",
+                        "integration", "onboarding", "workshop", "milestone", "shipment",
+                        "completed", "go-live", "acceptance"}
+# Signals that CONTRADICT the declared delivery type (per the Step 5
+# misconception paragraph) — these drop confidence.
+_ONGOING_WORDS = {"ongoing", "continuous", "updates", "evolving", "recurring"}
+_ONE_SHOT_WORDS = {"perpetual", "one-time", "single"}
+
+# Areas the reference doc lists under "What This Project Deliberately Does
+# Not Handle" — anything matching these is flagged for human review.
+_OUT_OF_SCOPE_PATTERNS = [
+    (r"financ(e|ing)|loan|interest", "significant financing components"),
+    (r"principal|agent|resell|marketplace|third[- ]party seller", "principal vs. agent determination"),
+    (r"multi[- ]currency|foreign currency|eur\b|gbp\b", "multi-currency contract rules"),
+    (r"lease|leasing", "leases (ASC 842, outside ASC 606)"),
+    (r"combined contract|contract combination", "contract combination rules"),
+]
+
+
+def _words(text: str) -> set[str]:
+    # Drop negated phrases ("no ongoing service", "without updates") before
+    # matching, so a negation isn't miscounted as a contradicting signal.
+    cleaned = re.sub(r"\b(?:no|without|not)\s+\w+(?:\s+\w+)?", " ", text.lower())
+    return set(re.findall(r"[a-z']+", cleaned))
+
+
+def assess_obligation(ob: dict) -> dict:
+    """Deterministic confidence + scope check for one obligation.
+
+    Returns {"confidence": high|medium|low, "confidence_reason": str,
+             "needs_review": bool, "review_reason": str|None}.
+    """
+    blob = f"{ob['type']} {ob['description']}"
+    w = _words(blob)
+
+    # Out-of-scope areas always go to human review.
+    for pattern, area in _OUT_OF_SCOPE_PATTERNS:
+        if re.search(pattern, blob, re.IGNORECASE):
+            return {
+                "confidence": "low",
+                "confidence_reason": f"Touches an out-of-scope area: {area}.",
+                "needs_review": True,
+                "review_reason": (
+                    f"The reference doc lists '{area}' under its scope boundaries — "
+                    "flagged for human review rather than auto-classified."
+                ),
+            }
+
+    is_over_time = ob["method"] == "over_time"
+    supporting = w & (_OVER_TIME_WORDS if is_over_time else _POINT_IN_TIME_WORDS)
+    contradicting = w & (_ONE_SHOT_WORDS if is_over_time else _ONGOING_WORDS)
+
+    if contradicting:
+        return {
+            "confidence": "low",
+            "confidence_reason": (
+                f"Description mentions {', '.join(sorted(contradicting))!s}, which cuts against a "
+                f"{'over-time' if is_over_time else 'point-in-time'} classification — the Step 5 "
+                "criteria may not map cleanly."
+            ),
+            "needs_review": True,
+            "review_reason": "Description conflicts with the declared delivery type — confirm the Step 5 criteria.",
+        }
+    if len(ob["description"].split()) < 4:
+        return {
+            "confidence": "low",
+            "confidence_reason": "Description is too sparse to verify distinctness (Step 2) or the Step 5 criteria.",
+            "needs_review": True,
+            "review_reason": "Deliverable description too sparse to verify the classification.",
+        }
+    if supporting:
+        return {
+            "confidence": "high",
+            "confidence_reason": (
+                f"Description clearly maps to the reference doc's "
+                f"{'over-time criterion 1 (continuous benefit)' if is_over_time else 'point-in-time control-transfer indicators'}."
+            ),
+            "needs_review": False, "review_reason": None,
+        }
+    return {
+        "confidence": "medium",
+        "confidence_reason": (
+            "Delivery type is stated but the description doesn't use vocabulary that maps "
+            "directly onto the Step 5 criteria — classification follows the declared type."
+        ),
+        "needs_review": False, "review_reason": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Grounded rationales
+# ---------------------------------------------------------------------------
+
+def _citation_for(ob: dict, processed: dict) -> str:
+    if ob["method"] == "over_time":
+        return ("Step 5, over-time criterion 1 (ASC 606-10-25-27): the customer "
+                "simultaneously receives and consumes the benefit as the company performs")
+    return ("Step 5, point-in-time recognition: none of the three over-time criteria are met; "
+            "control transfers at delivery/acceptance")
+
 
 def _template_rationale(ob: dict, processed: dict) -> str:
-    """Deterministic fallback rationale built from the classification facts."""
     total = processed["total_price"]
     ssp_sum = sum(o["standalone_price_estimate"] for o in processed["obligations"])
     pct = ob["standalone_price_estimate"] / ssp_sum * 100 if ssp_sum else 0
     if ob["method"] == "point_in_time":
         method_part = (
-            "Classified point-in-time because the customer obtains control of this "
-            "deliverable at a single moment (delivery/acceptance), so revenue is "
-            "recognized in full on that date."
+            "Recognized at a point in time per the reference guide's Step 5: none of the three "
+            "over-time criteria apply — the company's obligation is satisfied in a single moment "
+            "when control transfers (delivery/acceptance), even if the customer's own use is gradual."
         )
     else:
         method_part = (
-            "Classified over-time because the customer receives and consumes the "
-            "benefit continuously across the contract term, so revenue is spread "
-            "evenly by month."
+            "Recognized over time under Step 5, criterion 1 (ASC 606-10-25-27): the customer "
+            "simultaneously receives and consumes the benefit as the company performs, so revenue "
+            "is spread monthly across the service period."
         )
     if len(processed["obligations"]) > 1 and not ob.get("added_by_modification"):
-        alloc_part = (
-            f" It represents {pct:.0f}% of the bundle's standalone selling prices, so it "
-            f"was allocated ${ob['allocated_price']:,.2f} of the ${total:,.2f} transaction price."
+        method_part += (
+            f" Per Step 4, it carries {pct:.0f}% of the bundle's standalone selling prices, so it is "
+            f"allocated ${ob['allocated_price']:,.2f} of the ${total:,.2f} transaction price — the "
+            "bundle discount is spread proportionally, not assigned to one item."
         )
     elif ob.get("added_by_modification"):
-        alloc_part = (
-            " It was added by a mid-term modification, so its price comes from the "
-            "blended reallocation of remaining deferred revenue plus the added fee."
+        method_part += (
+            " Added by a mid-term modification treated as a prospective reallocation (the reference "
+            "guide's modification approach 2): remaining unrecognized consideration plus the added "
+            "fee were combined and reallocated over the remaining term."
         )
-    else:
-        alloc_part = ""
-    return method_part + alloc_part
+    return method_part
 
 
-def _claude_rationales(processed: dict) -> dict[str, str] | None:
-    """One API call per contract; returns {obligation_id: rationale} or None on failure."""
+def _claude_rationales(processed: dict) -> dict[str, dict] | None:
+    """One grounded API call per contract → {ob_id: {rationale, confidence}} or None."""
     try:
         import anthropic
     except ImportError:
         return None
+
+    doc = get_doc()
+    # Retrieve the sections relevant to this contract's features.
+    queries = ["performance obligations distinct", "recognize revenue over time point in time criteria",
+               "allocate transaction price standalone selling price"]
+    if processed.get("modification_note"):
+        queries.append("contract modifications prospective reallocation")
+    if processed.get("variable_note"):
+        queries.append("variable consideration transaction price constraint")
+    seen, sections = set(), []
+    for q in queries:
+        for s in doc.retrieve(q, k=2):
+            if s["title"] not in seen:
+                seen.add(s["title"])
+                sections.append(s)
+    grounding = "\n\n".join(f"### {s['title']}\n{s['text']}" for s in sections)
 
     facts = {
         "contract_id": processed["contract_id"],
         "customer": processed["customer"],
         "term": f"{processed['start_date']} to {processed['end_date']}",
         "total_price": processed["total_price"],
-        "obligations": processed["obligations"],
+        "obligations": [{k: o[k] for k in ("obligation_id", "type", "description",
+                                           "standalone_price_estimate", "allocated_price",
+                                           "method", "added_by_modification")}
+                        for o in processed["obligations"]],
         "modification_note": processed.get("modification_note"),
         "variable_note": processed.get("variable_note"),
     }
     schema = {
         "type": "object",
-        "properties": {
-            "rationales": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "obligation_id": {"type": "string"},
-                        "rationale": {"type": "string"},
-                    },
-                    "required": ["obligation_id", "rationale"],
-                    "additionalProperties": False,
-                },
-            }
-        },
+        "properties": {"rationales": {"type": "array", "items": {
+            "type": "object",
+            "properties": {
+                "obligation_id": {"type": "string"},
+                "rationale": {"type": "string"},
+                "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+            },
+            "required": ["obligation_id", "rationale", "confidence"],
+            "additionalProperties": False,
+        }}},
         "required": ["rationales"],
         "additionalProperties": False,
     }
@@ -90,16 +226,20 @@ def _claude_rationales(processed: dict) -> dict[str, str] | None:
         client = anthropic.Anthropic()
         response = client.messages.create(
             model=MODEL,
-            max_tokens=2000,
+            max_tokens=2500,
             system=(
-                "You are explaining the output of a deterministic ASC 606 revenue "
-                "recognition engine to a finance reviewer. For each performance "
-                "obligation, write a 1-2 sentence plain-English rationale covering "
-                "(a) why its recognition method (point_in_time vs over_time) fits the "
-                "nature of the deliverable and (b) why the allocated price is what it "
-                "is (proportional to standalone selling prices, or resulting from a "
-                "modification reallocation). You are explaining decisions already "
-                "made by rules — do not second-guess or change them."
+                "You explain the output of a deterministic ASC 606 revenue recognition engine "
+                "to a finance reviewer. Ground every statement in the reference guide excerpts "
+                "provided — do not rely on general knowledge, and never contradict the excerpts. "
+                "For each performance obligation write a 1-2 sentence rationale that names the "
+                "specific rule applied (e.g. 'over time under Step 5 criterion 1 (ASC 606-10-25-27)', "
+                "'Step 4 relative standalone selling price allocation', 'modification approach 2 — "
+                "prospective reallocation'). Also assess confidence: high if the deliverable "
+                "description maps cleanly onto the cited criteria, medium if the classification "
+                "follows the declared delivery type without clear supporting language, low if the "
+                "description is ambiguous or conflicts with the criteria. You are explaining "
+                "decisions already made by deterministic rules — never second-guess or change them."
+                f"\n\n# Reference guide excerpts\n\n{grounding}"
             ),
             messages=[{"role": "user", "content": json.dumps(facts, indent=2)}],
             output_config={"format": {"type": "json_schema", "schema": schema}},
@@ -107,24 +247,50 @@ def _claude_rationales(processed: dict) -> dict[str, str] | None:
         if response.stop_reason == "refusal":
             return None
         text = next(b.text for b in response.content if b.type == "text")
-        items = json.loads(text)["rationales"]
-        return {it["obligation_id"]: it["rationale"] for it in items}
+        return {it["obligation_id"]: {"rationale": it["rationale"], "confidence": it["confidence"]}
+                for it in json.loads(text)["rationales"]}
     except Exception:
         return None
 
 
 def add_rationales(processed: dict) -> dict:
-    """Attach a rationale (AI or template) to every obligation. Mutates + returns."""
+    """Attach grounded rationale + confidence + review flags per obligation."""
     ai = _claude_rationales(processed) if os.environ.get("ANTHROPIC_API_KEY") else None
-    rationales = {}
+    rationales, review_items = {}, []
     for ob in processed["obligations"]:
         ob_id = ob["obligation_id"]
+        assessment = assess_obligation(ob)
+
         if ai and ob_id in ai:
-            rationales[ob_id] = {"text": ai[ob_id], "source": "claude"}
+            text, source = ai[ob_id]["rationale"], "claude (RAG-grounded)"
+            # The AI can only lower confidence relative to the deterministic
+            # heuristic, never raise it above the rule-based floor checks.
+            order = {"high": 2, "medium": 1, "low": 0}
+            if order[ai[ob_id]["confidence"]] < order[assessment["confidence"]]:
+                assessment["confidence"] = ai[ob_id]["confidence"]
+                assessment["confidence_reason"] += " (Downgraded by AI review of the description.)"
+                if assessment["confidence"] == "low" and not assessment["needs_review"]:
+                    assessment["needs_review"] = True
+                    assessment["review_reason"] = "AI review judged the description ambiguous against the criteria."
         else:
-            rationales[ob_id] = {
-                "text": _template_rationale(ob, processed),
-                "source": "template",
-            }
+            text, source = _template_rationale(ob, processed), "template (reference-doc grounded)"
+
+        ob["confidence"] = assessment["confidence"]
+        ob["needs_review"] = assessment["needs_review"]
+        rationales[ob_id] = {
+            "text": text,
+            "source": source,
+            "rule_citation": _citation_for(ob, processed),
+            "confidence": assessment["confidence"],
+            "confidence_reason": assessment["confidence_reason"],
+        }
+        if assessment["needs_review"]:
+            review_items.append({
+                "obligation_id": ob_id,
+                "type": ob["type"],
+                "description": ob["description"],
+                "reason": assessment["review_reason"],
+            })
     processed["rationales"] = rationales
+    processed["needs_review"] = review_items
     return processed

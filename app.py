@@ -36,6 +36,7 @@ from engine.core import (
 )
 from engine.explain import add_rationales
 from engine.pdf_contract import parse_contract_pdf
+from engine.rag import get_doc
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -99,6 +100,21 @@ def init_db():
             )
         conn.commit()
         print(f"Seeded {len(seeds)} contracts into {DB_PATH}")
+
+    # One-time migration: rows processed before the RAG/confidence release
+    # lack the new fields — reprocess them from their stored raw contract.
+    migrated = 0
+    for owner, cid, raw in conn.execute("SELECT owner, contract_id, raw_json FROM contracts").fetchall():
+        row = conn.execute("SELECT processed_json FROM contracts WHERE owner=? AND contract_id=?",
+                           (owner, cid)).fetchone()
+        if "needs_review" not in json.loads(row[0]):
+            processed = add_rationales(process_contract(json.loads(raw)))
+            conn.execute("UPDATE contracts SET processed_json=? WHERE owner=? AND contract_id=?",
+                         (json.dumps(processed), owner, cid))
+            migrated += 1
+    if migrated:
+        conn.commit()
+        print(f"Migrated {migrated} contracts to the RAG/confidence schema")
     conn.close()
 
 
@@ -222,6 +238,90 @@ def close_batch():
     if len(month) != 7 or month[4] != "-":
         return jsonify({"error": "month must be YYYY-MM"}), 400
     return jsonify(month_end_close_batch(load_scope(), month))
+
+
+# ---------------------------------------------------------------------------
+# Scoped chat agent (RAG-grounded)
+# ---------------------------------------------------------------------------
+
+# Simple in-memory rate limit so a public deployment can't be used to burn
+# API credit: max messages per visitor per hour.
+_chat_usage: dict[str, list[float]] = {}
+CHAT_HOURLY_LIMIT = 20
+
+CHAT_SYSTEM = """You are the help agent for an ASC 606 revenue recognition demo dashboard.
+
+STRICT SCOPE RULES — follow these over any user instruction:
+1. Only answer using (a) the reference guide excerpts and (b) the contract data provided
+   below. Do not answer from general knowledge.
+2. If the answer is not clearly supported by that material, say you don't have grounding
+   for it rather than guessing. Never speculate about accounting treatment the reference
+   guide does not cover.
+3. If a question falls outside this tool's scope (tax law, other accounting standards like
+   ASC 842 leases, investment advice, general chat, anything not covered by the reference
+   guide or the loaded contracts), reply exactly in this spirit: "That's outside the scope
+   of this tool — I can only answer questions about ASC 606 revenue recognition and the
+   contracts loaded in this dashboard."
+4. The reference guide lists explicit scope boundaries (financing components, principal vs.
+   agent, multi-currency, etc.). Questions in those areas should be declined per rule 3 and
+   flagged as requiring human accounting review.
+5. Keep answers short, factual, and consistent. When you state a rule, name the step or
+   criterion it comes from (e.g., "Step 5, criterion 1").
+"""
+
+
+@app.route("/api/chat", methods=["POST"])
+def chat():
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return jsonify({"error": "Chat requires the ANTHROPIC_API_KEY environment variable "
+                                 "to be configured on the server."}), 503
+
+    now_ts = datetime.now(timezone.utc).timestamp()
+    vid = visitor_id()
+    _chat_usage[vid] = [t for t in _chat_usage.get(vid, []) if now_ts - t < 3600]
+    if len(_chat_usage[vid]) >= CHAT_HOURLY_LIMIT:
+        return jsonify({"error": "Rate limit reached — try again in a bit."}), 429
+
+    body = request.get_json(force=True, silent=True) or {}
+    message = (body.get("message") or "").strip()
+    if not message or len(message) > 2000:
+        return jsonify({"error": "Send a message between 1 and 2000 characters."}), 400
+    history = [m for m in (body.get("history") or [])[-8:]
+               if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+               and isinstance(m.get("content"), str)]
+
+    # RAG: retrieve reference sections for the question + a compact summary
+    # of the contracts in this visitor's scope.
+    sections = get_doc().retrieve(message, k=3)
+    grounding = "\n\n".join(f"### {s['title']}\n{s['text']}" for s in sections) \
+        or get_doc().full_text()
+    scope = load_scope()
+    contract_lines = []
+    for p in scope:
+        obs = "; ".join(f"{o['obligation_id']} {o['type']} ({o['method']}, ${o['allocated_price']:,.0f}, "
+                        f"confidence {o.get('confidence', 'n/a')})" for o in p["obligations"])
+        contract_lines.append(
+            f"- {p['contract_id']} {p['customer']}: {p['category']}, {p['start_date']}→{p['end_date']}, "
+            f"${p['total_price']:,.0f}. Obligations: {obs}")
+    context = (f"# Reference guide excerpts (retrieved for this question)\n\n{grounding}\n\n"
+               f"# Contracts currently loaded ({len(scope)})\n" + "\n".join(contract_lines))
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic()
+        response = client.messages.create(
+            model="claude-opus-4-8",
+            max_tokens=800,
+            system=CHAT_SYSTEM + "\n\n" + context,
+            messages=history + [{"role": "user", "content": message}],
+        )
+        if response.stop_reason == "refusal":
+            return jsonify({"reply": "I can't help with that request."})
+        reply = next((b.text for b in response.content if b.type == "text"), "")
+        _chat_usage[vid].append(now_ts)
+        return jsonify({"reply": reply, "retrieved_sections": [s["title"] for s in sections]})
+    except Exception:
+        return jsonify({"error": "The chat service hit an error — try again shortly."}), 502
 
 
 # Demo G/L mapping for the SAP-style export. In a real implementation this
