@@ -239,6 +239,33 @@ ships SQLite-only to stay dependency-light.
   (ASC 340-40), no disclosures.
 - **SQLite + cookie scoping is demo-grade persistence/auth.** A production
   version would use a real database and real authentication.
+- **Delete is a hard delete — no accounting-period awareness.** The delete
+  action fully removes a contract from storage and every aggregate. A real
+  system must distinguish deleting an *un-posted* test contract (a true
+  delete, as here) from reversing a contract whose entries have already
+  posted in a *closed* accounting period — the latter is never a silent
+  rewrite of history but a **reversing journal entry** in the current period,
+  preserving the audit trail. That period-close distinction is out of scope
+  for this demo; here, delete always fully rewrites the figures.
 
 These cuts keep the core mechanics — obligations, allocation, deferral,
 automated close, RPO — legible and demo-able.
+
+## Robustness & tests
+
+`scripts/test_bugfixes.py` covers the parsing/classification edge cases found
+through stress testing (run `python3 scripts/test_bugfixes.py`):
+
+- **PDF modification lines are never silently dropped.** A `Modification:`
+  block is either fully parsed and applied (prospective reallocation runs) or,
+  if incomplete, the upload is rejected with a review message — never processed
+  as if the modification weren't there.
+- **Confidence reasons are accurately attributed.** Recognition-method
+  confidence is driven only by the deliverable description (so the same text
+  scores the same everywhere), while allocation concerns like a **tied
+  standalone selling price** are a separate, explicitly-labeled review reason —
+  not conflated with "description too sparse."
+- **Currency parsing is robust.** `$5,000.00` / `$5000` / `$5,000` all parse;
+  negative formats (`$-5,000`, `-$5,000`, `($5,000)`) parse and are then
+  rejected with a specific "cannot be negative" message, distinct from the
+  "field not found" error for a genuinely missing price.

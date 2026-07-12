@@ -62,6 +62,8 @@
   #uploadStatus.err { color: var(--red); } #uploadStatus.ok { color: var(--green); }
   .scroll { max-height: 420px; overflow-y: auto; }
   .chartbox { position: relative; height: 300px; }
+  button.del { background: none; border: none; cursor: pointer; font-size: 15px; padding: 2px 6px; border-radius: 6px; opacity: .55; }
+  button.del:hover { opacity: 1; background: var(--red-soft); }
   .chip { display: inline-block; padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 600; margin-left: 6px; }
   .chip.high { background: var(--lime-soft); color: var(--green); }
   .chip.medium { background: var(--amber-soft); color: var(--amber); }
@@ -147,7 +149,7 @@ journal entries, deferred revenue, automated month-end close, and known-revenue 
     <div class="scroll"><table id="contractTable">
       <thead><tr>
         <th>ID</th><th>Customer</th><th>Category</th><th>Term</th>
-        <th class="num">Total price</th><th class="num">Obligations</th><th>Methods</th>
+        <th class="num">Total Price</th><th class="num">Obligations</th><th>Methods</th><th></th>
       </tr></thead>
       <tbody></tbody>
     </table></div>
@@ -260,12 +262,36 @@ function renderTable() {
       <td class="num">${fmt(p.total_price)}</td>
       <td class="num">${p.obligations.length}</td>
       <td>${[...new Set(p.obligations.map(o => o.method === "point_in_time" ? "PIT" : "OT"))].join(" + ")}${p.variable_note ? " + usage" : ""}</td>
+      <td>${p.deletable ? `<button class="del" data-del="${p.contract_id}" title="Delete this contract">🗑</button>` : ""}</td>
     </tr>`).join("");
-  tbody.querySelectorAll("tr").forEach(tr => tr.addEventListener("click", () => {
+  tbody.querySelectorAll("tr").forEach(tr => tr.addEventListener("click", e => {
+    if (e.target.classList.contains("del")) return;  // delete handled separately
     selectedId = tr.dataset.id;
     renderDetail(contracts.find(p => p.contract_id === selectedId));
     renderTable();
   }));
+  tbody.querySelectorAll("button.del").forEach(btn => btn.addEventListener("click", async e => {
+    e.stopPropagation();
+    await deleteContract(btn.dataset.del);
+  }));
+}
+
+async function deleteContract(id) {
+  if (!confirm(`Are you sure you want to delete contract ${id}? This cannot be undone.`)) return;
+  const status = document.getElementById("uploadStatus");
+  status.className = ""; status.textContent = `Deleting ${id}…`;
+  try {
+    const r = await fetch(`/api/contracts/${encodeURIComponent(id)}`, { method: "DELETE" });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    if (selectedId === id) { selectedId = null; document.getElementById("detail").classList.remove("open"); }
+    status.className = "ok";
+    status.textContent = `✓ ${id} deleted — charts, forecast, close batch, and review queue updated.`;
+    await loadAll();       // re-pulls contracts + aggregates + RPO
+    await runClose();      // re-pulls the close batch for the selected month
+  } catch (err) {
+    status.className = "err"; status.textContent = "✗ " + err.message;
+  }
 }
 
 function renderReview() {

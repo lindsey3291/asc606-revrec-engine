@@ -66,66 +66,85 @@ def _words(text: str) -> set[str]:
     return set(re.findall(r"[a-z']+", cleaned))
 
 
-def assess_obligation(ob: dict) -> dict:
-    """Deterministic confidence + scope check for one obligation.
+def assess_obligation(ob: dict, siblings: list[dict] | None = None) -> dict:
+    """Deterministic confidence + review check for one obligation.
 
-    Returns {"confidence": high|medium|low, "confidence_reason": str,
-             "needs_review": bool, "review_reason": str|None}.
+    Two concerns are assessed INDEPENDENTLY so the reasons stay accurate:
+
+    * ``confidence`` (high/medium/low) is about the RECOGNITION METHOD and is
+      driven ONLY by the deliverable's own description/type. The same
+      description therefore always yields the same confidence, regardless of
+      the rest of the contract.
+    * ``reviews`` is a list of accurate, separately-attributed reasons the
+      obligation should get a human look — out-of-scope area, description that
+      conflicts with the declared delivery type, a genuinely sparse
+      description, or an allocation concern such as a tied standalone selling
+      price. Each reason names its true trigger; they are never conflated.
+
+    Returns {"confidence", "confidence_reason", "needs_review", "reviews"}.
     """
     blob = f"{ob['type']} {ob['description']}"
     w = _words(blob)
+    reviews: list[str] = []
 
-    # Out-of-scope areas always go to human review.
-    for pattern, area in _OUT_OF_SCOPE_PATTERNS:
-        if re.search(pattern, blob, re.IGNORECASE):
-            return {
-                "confidence": "low",
-                "confidence_reason": f"Touches an out-of-scope area: {area}.",
-                "needs_review": True,
-                "review_reason": (
-                    f"The reference doc lists '{area}' under its scope boundaries — "
-                    "flagged for human review rather than auto-classified."
-                ),
-            }
-
+    # (A) Confidence in the recognition method — description-driven only.
     is_over_time = ob["method"] == "over_time"
     supporting = w & (_OVER_TIME_WORDS if is_over_time else _POINT_IN_TIME_WORDS)
     contradicting = w & (_ONE_SHOT_WORDS if is_over_time else _ONGOING_WORDS)
+    out_of_scope = next((area for pat, area in _OUT_OF_SCOPE_PATTERNS
+                         if re.search(pat, blob, re.IGNORECASE)), None)
 
-    if contradicting:
-        return {
-            "confidence": "low",
-            "confidence_reason": (
-                f"Description mentions {', '.join(sorted(contradicting))!s}, which cuts against a "
-                f"{'over-time' if is_over_time else 'point-in-time'} classification — the Step 5 "
-                "criteria may not map cleanly."
-            ),
-            "needs_review": True,
-            "review_reason": "Description conflicts with the declared delivery type — confirm the Step 5 criteria.",
-        }
-    if len(ob["description"].split()) < 4:
-        return {
-            "confidence": "low",
-            "confidence_reason": "Description is too sparse to verify distinctness (Step 2) or the Step 5 criteria.",
-            "needs_review": True,
-            "review_reason": "Deliverable description too sparse to verify the classification.",
-        }
-    if supporting:
-        return {
-            "confidence": "high",
-            "confidence_reason": (
-                f"Description clearly maps to the reference doc's "
-                f"{'over-time criterion 1 (continuous benefit)' if is_over_time else 'point-in-time control-transfer indicators'}."
-            ),
-            "needs_review": False, "review_reason": None,
-        }
-    return {
-        "confidence": "medium",
-        "confidence_reason": (
+    if out_of_scope:
+        confidence = "low"
+        confidence_reason = f"Touches an out-of-scope area: {out_of_scope}."
+        reviews.append(
+            f"The reference doc lists '{out_of_scope}' under its scope boundaries — "
+            "flagged for human review rather than auto-classified.")
+    elif contradicting:
+        confidence = "low"
+        confidence_reason = (
+            f"Description mentions {', '.join(sorted(contradicting))!s}, which cuts against a "
+            f"{'over-time' if is_over_time else 'point-in-time'} classification — the Step 5 "
+            "criteria may not map cleanly.")
+        reviews.append("Description conflicts with the declared delivery type — confirm the Step 5 criteria.")
+    elif supporting:
+        # Clear classifying vocabulary present — high confidence regardless of
+        # word count. (This check MUST precede the sparse-length heuristic so a
+        # short-but-clear description like "Perpetual software license" is not
+        # mislabeled as sparse.)
+        confidence = "high"
+        confidence_reason = (
+            "Description clearly maps to the reference doc's "
+            f"{'over-time criterion 1 (continuous benefit)' if is_over_time else 'point-in-time control-transfer indicators'}.")
+    elif len(ob["description"].split()) < 4:
+        confidence = "low"
+        confidence_reason = "Description is too sparse to verify distinctness (Step 2) or the Step 5 criteria."
+        reviews.append("Deliverable description is too sparse to verify the classification.")
+    else:
+        confidence = "medium"
+        confidence_reason = (
             "Delivery type is stated but the description doesn't use vocabulary that maps "
-            "directly onto the Step 5 criteria — classification follows the declared type."
-        ),
-        "needs_review": False, "review_reason": None,
+            "directly onto the Step 5 criteria — classification follows the declared type.")
+
+    # (B) Allocation concern — tied standalone selling prices. This is its own
+    # explicit check with its own message; it is NOT conflated with the
+    # description checks above, and it does not change the method confidence.
+    if siblings and len(siblings) > 1:
+        ties = [o for o in siblings
+                if o is not ob
+                and abs(o["standalone_price_estimate"] - ob["standalone_price_estimate"]) < 0.005]
+        if ties:
+            reviews.append(
+                f"Shares an identical standalone selling price "
+                f"(${ob['standalone_price_estimate']:,.2f}) with "
+                f"{'another obligation' if len(ties) == 1 else f'{len(ties)} other obligations'} — "
+                "the relative-SSP allocation (Step 4) may need manual confirmation.")
+
+    return {
+        "confidence": confidence,
+        "confidence_reason": confidence_reason,
+        "needs_review": bool(reviews),
+        "reviews": reviews,
     }
 
 
@@ -256,10 +275,11 @@ def _claude_rationales(processed: dict) -> dict[str, dict] | None:
 def add_rationales(processed: dict) -> dict:
     """Attach grounded rationale + confidence + review flags per obligation."""
     ai = _claude_rationales(processed) if os.environ.get("ANTHROPIC_API_KEY") else None
+    obligations = processed["obligations"]
     rationales, review_items = {}, []
-    for ob in processed["obligations"]:
+    for ob in obligations:
         ob_id = ob["obligation_id"]
-        assessment = assess_obligation(ob)
+        assessment = assess_obligation(ob, obligations)
 
         if ai and ob_id in ai:
             text, source = ai[ob_id]["rationale"], "claude (RAG-grounded)"
@@ -269,9 +289,10 @@ def add_rationales(processed: dict) -> dict:
             if order[ai[ob_id]["confidence"]] < order[assessment["confidence"]]:
                 assessment["confidence"] = ai[ob_id]["confidence"]
                 assessment["confidence_reason"] += " (Downgraded by AI review of the description.)"
-                if assessment["confidence"] == "low" and not assessment["needs_review"]:
+                if assessment["confidence"] == "low":
+                    assessment["reviews"].append(
+                        "AI review judged the description ambiguous against the criteria.")
                     assessment["needs_review"] = True
-                    assessment["review_reason"] = "AI review judged the description ambiguous against the criteria."
         else:
             text, source = _template_rationale(ob, processed), "template (reference-doc grounded)"
 
@@ -284,12 +305,15 @@ def add_rationales(processed: dict) -> dict:
             "confidence": assessment["confidence"],
             "confidence_reason": assessment["confidence_reason"],
         }
-        if assessment["needs_review"]:
+        # One Needs-Review entry per accurate reason, so a single obligation
+        # can appear for both (say) a tied price and a sparse description
+        # without either reason being mislabeled as the other.
+        for reason in assessment["reviews"]:
             review_items.append({
                 "obligation_id": ob_id,
                 "type": ob["type"],
                 "description": ob["description"],
-                "reason": assessment["review_reason"],
+                "reason": reason,
             })
     processed["rationales"] = rationales
     processed["needs_review"] = review_items

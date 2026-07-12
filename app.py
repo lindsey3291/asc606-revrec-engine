@@ -162,7 +162,20 @@ def index():
 
 @app.route("/api/contracts")
 def list_contracts():
-    return jsonify({"contracts": load_scope()})
+    """List contracts in scope, tagging each with whether this visitor may
+    delete it (their own uploads — not the shared seed contracts)."""
+    db = get_db()
+    rows = db.execute(
+        "SELECT owner, processed_json FROM contracts WHERE owner IN ('seed', ?) "
+        "ORDER BY owner != 'seed', contract_id",
+        (visitor_id(),),
+    ).fetchall()
+    out = []
+    for r in rows:
+        p = json.loads(r["processed_json"])
+        p["deletable"] = r["owner"] != "seed"
+        out.append(p)
+    return jsonify({"contracts": out})
 
 
 @app.route("/api/contracts/<contract_id>")
@@ -220,6 +233,32 @@ def upload_contract():
     )
     db.commit()
     return jsonify(processed), 201
+
+
+@app.route("/api/contracts/<contract_id>", methods=["DELETE"])
+def delete_contract(contract_id):
+    """Delete one of THIS visitor's uploaded contracts, fully.
+
+    Only the visitor's own uploads are deletable — the 20 seed contracts are
+    shared and stay visible to everyone. Deletion removes the row from the
+    database; because every aggregate view (deferred revenue series, RPO
+    forecast, close batch, needs-review) is computed on demand from the
+    remaining rows, the deleted contract disappears from all of them on the
+    next fetch with no other bookkeeping required.
+    """
+    db = get_db()
+    seed = db.execute(
+        "SELECT 1 FROM contracts WHERE owner='seed' AND contract_id=?", (contract_id,)
+    ).fetchone()
+    if seed:
+        return jsonify({"error": "The 20 sample contracts are shared and can't be deleted."}), 403
+    cur = db.execute(
+        "DELETE FROM contracts WHERE owner=? AND contract_id=?", (visitor_id(), contract_id)
+    )
+    db.commit()
+    if cur.rowcount == 0:
+        return jsonify({"error": f"Contract '{contract_id}' not found among your uploads."}), 404
+    return jsonify({"deleted": contract_id}), 200
 
 
 @app.route("/api/aggregates")

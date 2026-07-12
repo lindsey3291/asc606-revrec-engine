@@ -55,7 +55,16 @@ pdf.multi_cell(0, 5,
     "Delivery must be one_time (point-in-time recognition) or over_time (spread "
     "monthly across the term). Dates must be YYYY-MM-DD. Add or remove numbered "
     "deliverable lines as needed - the total price is allocated across them in "
-    "proportion to their standalone prices.")
+    "proportion to their standalone prices. Prices may be written $12,000, "
+    "$12,000.00, or 12000; negative prices are rejected.")
+pdf.ln(2)
+pdf.multi_cell(0, 5,
+    "OPTIONAL - mid-term modification. To add one, include a line exactly like: "
+    "Modification: Mod Date: 2026-05-01 | Mod Description: Added a module | "
+    "Added Price: $24,000.00 | Added Type: subscription_addon | Added Description: "
+    "Fraud analytics for remaining term | Added Standalone Price: $24,000.00 | "
+    "Added Delivery: over_time . If a Modification line is present but any field "
+    "is missing, the upload is flagged for review rather than silently ignored.")
 
 pdf.output(OUT)
 print(f"Wrote {OUT}")
