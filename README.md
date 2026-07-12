@@ -6,9 +6,13 @@ recognition schedules → journal entries → deferred revenue → automated mon
 close → known-revenue (RPO) forecast — with a web dashboard, dynamic contract
 upload, and an AI layer that *explains* (but never *makes*) the accounting decisions.
 
-Built as a portfolio piece. 20 mock B2B contracts covering one-time sales,
-subscriptions (6/12/24-month terms), bundles requiring price allocation,
-mid-term modifications, and variable consideration.
+Built as a portfolio piece. The 10 seed contracts are written as **realistic
+prose contract documents** (order forms, SOWs, an MSA excerpt — letterhead,
+numbered sections, signature blocks), not label:value forms. The extractor
+reads the prose and reasons — grounded in the ASC 606 three-criteria test —
+about what's being sold, whether each obligation is point-in-time or
+over-time, the dates, price, and customer. Where a bundle gives no basis to
+split a price, it flags for review instead of fabricating an allocation.
 
 ## Quick start
 
@@ -81,14 +85,52 @@ excludes new sales, renewals, pipeline, and variable/usage fees. A total revenue
 forecast would require separate assumptions (e.g., average new contract value ×
 expected close rate) and is intentionally not blended into this number.
 
-## Dynamic contract upload + incremental aggregation
+## Contract extraction — prose and structured, one internal schema
 
-The dashboard's **Upload Contract** button accepts a contract **PDF** that
-follows the sample order form (`static/sample_contract.pdf`, linked in the
-UI) — parsed deterministically with pypdf, no AI — or a JSON file in the
-seed-contract structure. Either path runs through the *same*
-`process_contract()` pipeline as the seeds — classification, allocation,
-scheduling, journal entries, AI rationale — then persists to SQLite.
+`engine/extract.py` is the single entry point for reading a contract PDF. It
+detects the format and routes:
+
+- **Prose** (realistic order form / SOW / MSA excerpt): the extractor calls
+  the Claude API with the ASC 606 reference guide in context and reasons about
+  each obligation — control-transfer timing via the three-criteria test (not a
+  keyword match on "months"), the dates, price, customer, and allocation. If a
+  bundle states no basis to split a price, it returns the obligation with a
+  null price and a review flag rather than inventing a number. Requires
+  `ANTHROPIC_API_KEY`; without it, prose upload returns a clear message.
+- **Structured** (the legacy `Label: value` order form): parsed
+  deterministically by `engine/pdf_contract.py`, exactly as before — **full
+  backward compatibility** with earlier test PDFs, and works with no API key.
+
+Both paths are pure translation into the **same internal contract dict**
+(`contract_id, customer, start_date, end_date, total_price, deliverables[...],
+optional modification`), so nothing downstream — journal entries, deferred
+revenue, SAP export, forecast — knows or cares where a contract came from.
+
+The seed set ships as 10 prose PDFs in `data/seed_pdfs/` plus their
+machine-extracted representation in `data/seed_contracts.json` (authored
+ground truth, since the deployed instance seeds at startup without an API
+key). With a key configured, re-uploading any of those same PDFs exercises the
+live extractor. The dashboard's **Upload Contract** button also accepts a JSON
+file in the same internal shape.
+
+### Flagged obligations are excluded from the totals (not guessed)
+
+An obligation the extractor can't price or classify with confidence — an
+unpriced bundle component, a variable/usage fee, ambiguous timing — is carried
+but **excluded** from every calculation: it produces no schedule, journal
+entry, or deferred-revenue row, so it's absent from the deferred revenue
+chart, the RPO forecast, and the month-end close batch. The dashboard shows a
+visible **"$X excluded from the totals pending review"** banner naming the
+affected contracts, so the incomplete totals read as intentional rather than a
+bug. A **Resolve pricing** control on an uploaded flagged contract lets a
+person supply the missing standalone price and timing; the obligation then
+flows into the aggregates normally. (The shared seed contracts stay flagged as
+permanent demonstrations.)
+
+Among the 10 seeds, contracts **ORD-2603** (bundle, one aggregate fee),
+**ORD-2608** (base fee + variable usage), and **ORD-2609** (three-component
+bundle, single total) are correctly flagged — $198,000 held out of the totals
+pending review — rather than silently allocated.
 
 **Incremental by design:** each contract is processed exactly once and its full
 result is cached. Aggregate views (deferred revenue series, close batch, RPO
@@ -183,9 +225,11 @@ scripts/generate_report.py  offline report bundle (JSON/CSV/markdown → output/
 |---|---|
 | `GET /api/contracts` | All contracts in scope (seeds + your uploads), fully processed |
 | `GET /api/contracts/<id>` | One contract's full detail |
-| `POST /api/contracts` | Upload a new contract (PDF order form or JSON; multipart `file` or raw JSON body) |
+| `POST /api/contracts` | Upload a new contract (prose PDF, structured PDF, or JSON; multipart `file` or raw JSON body) |
+| `DELETE /api/contracts/<id>` | Delete one of your own uploaded contracts (seeds protected) |
+| `POST /api/contracts/<id>/resolve` | Supply missing prices/timing for a flagged upload so it flows into the totals |
 | `GET /api/close-batch.csv?month=YYYY-MM` | Close batch as an SAP-upload-style CSV (posting keys, G/L accounts, cost/profit centers) |
-| `GET /api/aggregates` | Deferred revenue series + recognized-by-method series |
+| `GET /api/aggregates` | Deferred revenue series, recognized-by-method series, and excluded-pending totals |
 | `GET /api/close-batch?month=YYYY-MM` | Month-end close batch + control flags |
 | `GET /api/forecast?from=YYYY-MM&months=12` | Known revenue (RPO) forecast |
 
@@ -269,3 +313,15 @@ through stress testing (run `python3 scripts/test_bugfixes.py`):
   negative formats (`$-5,000`, `-$5,000`, `($5,000)`) parse and are then
   rejected with a specific "cannot be negative" message, distinct from the
   "field not found" error for a genuinely missing price.
+- **Prose seeds flag, exclude, and reallocate correctly.** ORD-2603 / ORD-2609
+  are fully flagged (no silent allocation); ORD-2608's base fee is recognized
+  while its variable component is flagged; $198,000 is held out of the totals;
+  the seed-#4 modification is applied; and every included contract's deferred
+  revenue drains to zero.
+- **Backward compatibility holds.** A structured `Label: value` PDF is still
+  detected and parsed exactly as before; a prose PDF is routed to the AI
+  extractor. Both yield the identical internal schema.
+
+Regenerate the prose seed PDFs with `python3 scripts/make_seed_pdfs.py`
+(requires `fpdf2`, a dev-only dependency — the runtime loads the seeds from
+`data/seed_contracts.json`).

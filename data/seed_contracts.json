@@ -1,383 +1,223 @@
 [
   {
-    "contract_id": "C-001",
-    "customer": "Meridian Health Group",
-    "start_date": "2025-08-15",
-    "end_date": "2025-08-15",
-    "total_price": 18000,
-    "deliverables": [
-      {
-        "type": "hardware",
-        "description": "40 payment terminals, delivered and title transferred on 2025-08-15",
-        "standalone_price_estimate": 18000,
-        "delivery_type": "one_time"
-      }
-    ]
-  },
-  {
-    "contract_id": "C-002",
-    "customer": "Bluepine Logistics",
-    "start_date": "2025-10-01",
-    "end_date": "2025-10-01",
-    "total_price": 45000,
-    "deliverables": [
-      {
-        "type": "perpetual_license",
-        "description": "Perpetual on-premise license, functional on delivery with no ongoing service obligation",
-        "standalone_price_estimate": 45000,
-        "delivery_type": "one_time"
-      }
-    ]
-  },
-  {
-    "contract_id": "C-003",
-    "customer": "Corvid Analytics",
-    "start_date": "2025-11-20",
-    "end_date": "2025-11-20",
-    "total_price": 22500,
-    "deliverables": [
-      {
-        "type": "professional_services",
-        "description": "Fixed-fee data migration project, accepted by the customer on completion",
-        "standalone_price_estimate": 22500,
-        "delivery_type": "one_time"
-      }
-    ]
-  },
-  {
-    "contract_id": "C-004",
-    "customer": "Harbor & Lane LLP",
-    "start_date": "2026-01-10",
-    "end_date": "2026-01-10",
-    "total_price": 9600,
-    "deliverables": [
-      {
-        "type": "hardware",
-        "description": "12 point-of-sale devices delivered in a single shipment",
-        "standalone_price_estimate": 9600,
-        "delivery_type": "one_time"
-      }
-    ]
-  },
-  {
-    "contract_id": "C-005",
-    "customer": "Tessellate Retail",
-    "start_date": "2026-03-05",
-    "end_date": "2026-03-05",
-    "total_price": 31000,
-    "deliverables": [
-      {
-        "type": "professional_services",
-        "description": "One-time ERP integration build, delivered and signed off as a single milestone",
-        "standalone_price_estimate": 31000,
-        "delivery_type": "one_time"
-      }
-    ]
-  },
-  {
-    "contract_id": "C-006",
-    "customer": "Quill & Co Stationers",
-    "start_date": "2026-05-22",
-    "end_date": "2026-05-22",
-    "total_price": 12000,
-    "deliverables": [
-      {
-        "type": "setup_fee",
-        "description": "Standalone store setup and hardware installation completed same day",
-        "standalone_price_estimate": 12000,
-        "delivery_type": "one_time"
-      }
-    ]
-  },
-  {
-    "contract_id": "C-007",
-    "customer": "Northwind Capital",
-    "start_date": "2025-07-01",
-    "end_date": "2026-06-30",
-    "total_price": 60000,
-    "deliverables": [
-      {
-        "type": "subscription",
-        "description": "12-month SaaS platform subscription, service delivered continuously",
-        "standalone_price_estimate": 60000,
-        "delivery_type": "over_time"
-      }
-    ]
-  },
-  {
-    "contract_id": "C-008",
-    "customer": "Atlas Freight Systems",
-    "start_date": "2025-10-01",
-    "end_date": "2026-09-30",
-    "total_price": 84000,
-    "deliverables": [
-      {
-        "type": "subscription",
-        "description": "12-month logistics analytics subscription",
-        "standalone_price_estimate": 84000,
-        "delivery_type": "over_time"
-      }
-    ]
-  },
-  {
-    "contract_id": "C-009",
-    "customer": "Juniper Books",
-    "start_date": "2026-02-01",
-    "end_date": "2026-07-31",
-    "total_price": 15000,
-    "deliverables": [
-      {
-        "type": "subscription",
-        "description": "6-month seasonal e-commerce subscription",
-        "standalone_price_estimate": 15000,
-        "delivery_type": "over_time"
-      }
-    ]
-  },
-  {
-    "contract_id": "C-010",
-    "customer": "Halcyon Health Networks",
-    "start_date": "2025-09-01",
-    "end_date": "2027-08-31",
-    "total_price": 192000,
-    "deliverables": [
-      {
-        "type": "subscription",
-        "description": "24-month enterprise platform subscription with annual prepayment",
-        "standalone_price_estimate": 192000,
-        "delivery_type": "over_time"
-      }
-    ]
-  },
-  {
-    "contract_id": "C-011",
-    "customer": "Percheron Manufacturing",
+    "contract_id": "ORD-2601",
+    "customer": "Cedar Grove Financial",
     "start_date": "2026-01-01",
     "end_date": "2026-12-31",
-    "total_price": 48000,
-    "deliverables": [
-      {
-        "type": "subscription",
-        "description": "12-month operations dashboard subscription",
-        "standalone_price_estimate": 48000,
-        "delivery_type": "over_time"
-      }
-    ]
-  },
-  {
-    "contract_id": "C-012",
-    "customer": "Violet Systems",
-    "start_date": "2026-04-01",
-    "end_date": "2027-03-31",
     "total_price": 72000,
     "deliverables": [
       {
         "type": "subscription",
-        "description": "12-month API platform subscription",
+        "description": "Access to the Northstar Analytics Platform for a period of twelve (12) months",
         "standalone_price_estimate": 72000,
         "delivery_type": "over_time"
       }
     ]
   },
   {
-    "contract_id": "C-013",
-    "customer": "Copperfield Bank",
-    "start_date": "2025-10-01",
-    "end_date": "2026-09-30",
-    "total_price": 90000,
+    "contract_id": "ORD-2602",
+    "customer": "Harborview Clinics",
+    "start_date": "2026-02-10",
+    "end_date": "2026-02-10",
+    "total_price": 24000,
     "deliverables": [
       {
-        "type": "license",
-        "description": "Software license delivered and usable at contract start",
-        "standalone_price_estimate": 50000,
-        "delivery_type": "one_time"
-      },
-      {
-        "type": "implementation",
-        "description": "Implementation and configuration, completed at go-live",
-        "standalone_price_estimate": 20000,
-        "delivery_type": "one_time"
-      },
-      {
-        "type": "support",
-        "description": "12 months of premium support and maintenance",
-        "standalone_price_estimate": 30000,
-        "delivery_type": "over_time"
-      }
-    ]
-  },
-  {
-    "contract_id": "C-014",
-    "customer": "Dune Terrace Hotels",
-    "start_date": "2025-12-01",
-    "end_date": "2026-11-30",
-    "total_price": 50000,
-    "deliverables": [
-      {
-        "type": "subscription",
-        "description": "12-month property management SaaS subscription",
-        "standalone_price_estimate": 40000,
-        "delivery_type": "over_time"
-      },
-      {
-        "type": "implementation",
-        "description": "Onboarding and data setup, completed at go-live",
-        "standalone_price_estimate": 15000,
-        "delivery_type": "one_time"
-      }
-    ]
-  },
-  {
-    "contract_id": "C-015",
-    "customer": "Kestrel Aviation Services",
-    "start_date": "2025-08-01",
-    "end_date": "2027-07-31",
-    "total_price": 162000,
-    "deliverables": [
-      {
-        "type": "license",
-        "description": "Enterprise license delivered at contract start",
-        "standalone_price_estimate": 120000,
-        "delivery_type": "one_time"
-      },
-      {
-        "type": "support",
-        "description": "24 months of support and version upgrades",
-        "standalone_price_estimate": 60000,
-        "delivery_type": "over_time"
-      }
-    ]
-  },
-  {
-    "contract_id": "C-016",
-    "customer": "Marlowe Media",
-    "start_date": "2026-03-01",
-    "end_date": "2027-02-28",
-    "total_price": 50000,
-    "deliverables": [
-      {
-        "type": "subscription",
-        "description": "12-month content platform subscription",
-        "standalone_price_estimate": 36000,
-        "delivery_type": "over_time"
-      },
-      {
-        "type": "onboarding",
-        "description": "Onboarding workshop delivered in the first week",
-        "standalone_price_estimate": 8000,
-        "delivery_type": "one_time"
-      },
-      {
-        "type": "support",
-        "description": "12 months of premium support",
-        "standalone_price_estimate": 12000,
-        "delivery_type": "over_time"
-      }
-    ]
-  },
-  {
-    "contract_id": "C-017",
-    "customer": "Ravenna Foods",
-    "start_date": "2026-05-01",
-    "end_date": "2026-10-31",
-    "total_price": 27000,
-    "deliverables": [
-      {
-        "type": "subscription",
-        "description": "6-month supply chain visibility subscription",
-        "standalone_price_estimate": 20000,
-        "delivery_type": "over_time"
-      },
-      {
-        "type": "implementation",
-        "description": "Carrier integrations completed at go-live",
-        "standalone_price_estimate": 10000,
-        "delivery_type": "one_time"
-      }
-    ]
-  },
-  {
-    "contract_id": "C-018",
-    "customer": "Sable Point Insurance",
-    "start_date": "2025-11-01",
-    "end_date": "2026-10-31",
-    "total_price": 96000,
-    "deliverables": [
-      {
-        "type": "subscription",
-        "description": "12-month claims processing platform subscription",
-        "standalone_price_estimate": 96000,
-        "delivery_type": "over_time"
-      }
-    ],
-    "modification": {
-      "date": "2026-05-01",
-      "description": "Customer added the fraud analytics module in month 7 for the remainder of the term",
-      "added_price": 24000,
-      "added_deliverable": {
-        "type": "subscription_addon",
-        "description": "Fraud analytics module for the remaining 6 months of the term",
+        "type": "hardware",
+        "description": "Thirty (30) Ironclad payment terminal units delivered upon execution of this order",
         "standalone_price_estimate": 24000,
-        "delivery_type": "over_time"
+        "delivery_type": "one_time"
       }
-    }
+    ]
   },
   {
-    "contract_id": "C-019",
-    "customer": "Foxglove Robotics",
+    "contract_id": "ORD-2603",
+    "customer": "Talbot & Reyes LLP",
+    "start_date": "2026-03-03",
+    "end_date": "2026-03-03",
+    "total_price": 40000,
+    "deliverables": [
+      {
+        "type": "license",
+        "description": "Perpetual license to the Meridian practice-management software",
+        "standalone_price_estimate": null,
+        "delivery_type": "unknown",
+        "review": {
+          "kind": "unpriced_bundle",
+          "reason": "Standalone selling price not stated in the contract text; the bundle's single aggregate fee ($40,000) cannot be split between the license and the onboarding/configuration services without a pricing basis from a source outside this document.",
+          "excluded_amount": null
+        }
+      },
+      {
+        "type": "implementation",
+        "description": "Onboarding and configuration services provided together with the license",
+        "standalone_price_estimate": null,
+        "delivery_type": "unknown",
+        "review": {
+          "kind": "unpriced_bundle",
+          "reason": "Standalone selling price not stated in the contract text; the bundle's single aggregate fee ($40,000) cannot be split between the license and the onboarding/configuration services without a pricing basis from a source outside this document.",
+          "excluded_amount": null
+        }
+      }
+    ]
+  },
+  {
+    "contract_id": "ORD-2604",
+    "customer": "Pinnacle Manufacturing",
     "start_date": "2026-01-01",
-    "end_date": "2026-12-31",
-    "total_price": 60000,
+    "end_date": "2027-12-31",
+    "total_price": 72000,
     "deliverables": [
       {
-        "type": "license",
-        "description": "Software license delivered at contract start",
-        "standalone_price_estimate": 40000,
-        "delivery_type": "one_time"
-      },
-      {
         "type": "support",
-        "description": "12 months of standard support",
-        "standalone_price_estimate": 24000,
+        "description": "Ongoing maintenance and support of the Blue Ridge control systems for a term of twenty-four (24) months, billed at a recurring monthly rate",
+        "standalone_price_estimate": 72000,
         "delivery_type": "over_time"
       }
     ],
     "modification": {
-      "date": "2026-07-01",
-      "description": "Customer upgraded to a premium SLA at mid-term for the remaining 6 months",
-      "added_price": 9000,
+      "date": "2026-12-01",
+      "description": "In month 12 of the Term, Customer expanded coverage to add Premium Priority Support for the remainder of the Term",
+      "added_price": 18000,
       "added_deliverable": {
         "type": "support_addon",
-        "description": "Premium SLA upgrade for the remaining 6 months",
-        "standalone_price_estimate": 9000,
+        "description": "Premium Priority Support coverage for the remaining twelve (12) months of the Term",
+        "standalone_price_estimate": 18000,
         "delivery_type": "over_time"
       }
     }
   },
   {
-    "contract_id": "C-020",
-    "customer": "Wrenfield Markets",
-    "start_date": "2026-01-01",
-    "end_date": "2026-12-31",
+    "contract_id": "ORD-2605",
+    "customer": "Coastline Retail",
+    "start_date": "2026-04-15",
+    "end_date": "2026-04-15",
+    "total_price": 50000,
+    "deliverables": [
+      {
+        "type": "license",
+        "description": "Perpetual software license to the Vertex point-of-sale suite, separately priced at $30,000",
+        "standalone_price_estimate": 30000,
+        "delivery_type": "one_time"
+      },
+      {
+        "type": "implementation",
+        "description": "Implementation and store configuration services (remainder of the total contract value)",
+        "standalone_price_estimate": 20000,
+        "delivery_type": "one_time"
+      }
+    ]
+  },
+  {
+    "contract_id": "ORD-2606",
+    "customer": "Fenwick Holdings",
+    "start_date": "2026-06-04",
+    "end_date": "2026-06-04",
+    "total_price": 22500,
+    "deliverables": [
+      {
+        "type": "professional_services",
+        "description": "A written market-assessment report delivered within thirty (30) days of execution, for a flat fee",
+        "standalone_price_estimate": 22500,
+        "delivery_type": "one_time"
+      }
+    ]
+  },
+  {
+    "contract_id": "ORD-2607",
+    "customer": "Ashford Group",
+    "start_date": "2026-02-01",
+    "end_date": "2027-01-31",
+    "total_price": 48000,
+    "deliverables": [
+      {
+        "type": "platform_fee",
+        "description": "Annual platform fee for use of the Quantum Ledger Services during the twelve (12) month Term",
+        "standalone_price_estimate": 48000,
+        "delivery_type": "over_time"
+      }
+    ]
+  },
+  {
+    "contract_id": "ORD-2608",
+    "customer": "Riverstone Markets",
+    "start_date": "2026-03-01",
+    "end_date": "2027-02-28",
     "total_price": 36000,
     "deliverables": [
       {
         "type": "subscription",
-        "description": "12-month payments platform base subscription",
+        "description": "Base platform access fee for the Nimbus Payments service over a twelve (12) month term",
         "standalone_price_estimate": 36000,
         "delivery_type": "over_time"
+      },
+      {
+        "type": "usage_fee",
+        "description": "Variable usage-based transaction fee, estimated at $8,000 annually, subject to variation based on transaction volume",
+        "standalone_price_estimate": null,
+        "delivery_type": "over_time",
+        "review": {
+          "kind": "variable_consideration",
+          "reason": "Variable, usage-based consideration subject to variation. Per the reference guide, variable-consideration constraint estimation is out of scope for this tool — the amount is excluded from recognized totals and flagged for human review rather than confidently classified.",
+          "excluded_amount": 8000
+        }
       }
-    ],
-    "variable_consideration": {
-      "description": "Tiered per-transaction fees above the included volume, billed monthly in arrears based on actual usage",
-      "monthly_actuals": {
-        "2026-01": 1850,
-        "2026-02": 2340,
-        "2026-03": 2120,
-        "2026-04": 2760,
-        "2026-05": 3010,
-        "2026-06": 3385
+    ]
+  },
+  {
+    "contract_id": "ORD-2609",
+    "customer": "Grandview Health",
+    "start_date": "2026-06-01",
+    "end_date": "2026-06-01",
+    "total_price": 150000,
+    "deliverables": [
+      {
+        "type": "license",
+        "description": "Perpetual license to the Apex clinical platform",
+        "standalone_price_estimate": null,
+        "delivery_type": "unknown",
+        "review": {
+          "kind": "unpriced_bundle",
+          "reason": "Three distinct components (license, one-time data migration, and ongoing support) are sold under a single total contract value of $150,000 with no per-component pricing. There is no reasonable basis in the document to allocate the price across the three obligations — flagged for human review.",
+          "excluded_amount": null
+        }
+      },
+      {
+        "type": "professional_services",
+        "description": "One-time data migration of existing clinical records",
+        "standalone_price_estimate": null,
+        "delivery_type": "unknown",
+        "review": {
+          "kind": "unpriced_bundle",
+          "reason": "Three distinct components (license, one-time data migration, and ongoing support) are sold under a single total contract value of $150,000 with no per-component pricing. There is no reasonable basis in the document to allocate the price across the three obligations — flagged for human review.",
+          "excluded_amount": null
+        }
+      },
+      {
+        "type": "support",
+        "description": "Ongoing support and maintenance over a twenty-four (24) month term",
+        "standalone_price_estimate": null,
+        "delivery_type": "unknown",
+        "review": {
+          "kind": "unpriced_bundle",
+          "reason": "Three distinct components (license, one-time data migration, and ongoing support) are sold under a single total contract value of $150,000 with no per-component pricing. There is no reasonable basis in the document to allocate the price across the three obligations — flagged for human review.",
+          "excluded_amount": null
+        }
       }
-    }
+    ]
+  },
+  {
+    "contract_id": "ORD-2610",
+    "customer": "Lakeside Foods",
+    "start_date": "2026-02-04",
+    "end_date": "2026-02-04",
+    "total_price": 15000,
+    "deliverables": [
+      {
+        "type": "equipment",
+        "description": "Refrigeration equipment delivered and installed within fifteen (15) days of the purchase order",
+        "standalone_price_estimate": 15000,
+        "delivery_type": "one_time"
+      }
+    ]
   }
 ]

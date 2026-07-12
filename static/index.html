@@ -77,15 +77,25 @@
   #chatForm { display: flex; gap: 8px; }
   #chatInput { flex: 1; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 13px; }
   #chatSend { background: var(--ink); color: var(--lime); border: 1px solid var(--ink); border-radius: 8px; padding: 8px 16px; font-weight: 600; cursor: pointer; }
+  #excludedNote { background: var(--amber-soft); border: 1px solid #e7c48a; color: #7a4a08; border-radius: 12px; padding: 12px 16px; margin-bottom: 16px; font-size: 13px; display: none; }
+  #excludedNote.show { display: block; }
+  .chip.pending { background: var(--amber-soft); color: var(--amber); }
+  .resolvebox { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 8px 0; }
+  .resolvebox .row { display: flex; gap: 8px; align-items: center; margin: 6px 0; flex-wrap: wrap; }
+  .resolvebox input, .resolvebox select { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; font-size: 13px; }
+  .resolvebox button { background: var(--ink); color: var(--lime); border: none; border-radius: 6px; padding: 6px 14px; font-weight: 600; cursor: pointer; }
 </style>
 </head>
 <body>
 
 <h1>ASC 606 Revenue Recognition Engine</h1>
-<p class="sub">Deterministic revenue recognition for 20+ B2B contracts — performance obligations, price allocation,
-journal entries, deferred revenue, automated month-end close, and known-revenue forecasting. AI explains the output; rules make the decisions.</p>
+<p class="sub">Revenue recognition for B2B contracts read from realistic contract PDFs — the extractor reasons about
+each obligation (point-in-time vs. over-time) from the prose, grounded in the ASC 606 three-criteria test. Performance
+obligations, price allocation, journal entries, deferred revenue, automated month-end close, and known-revenue forecasting.</p>
 
 <div class="kpis" id="kpis"></div>
+
+<div id="excludedNote"></div>
 
 <div class="grid">
   <div class="card full">
@@ -190,12 +200,25 @@ async function loadAll() {
   ]);
   contracts = c.contracts;
   renderKPIs(agg, rpo);
+  renderExcludedNote(agg.excluded_pending);
   renderDR(agg.deferred_revenue);
   renderMethod(agg.recognized_by_method);
   renderRPO(rpo);
   renderTable();
   renderReview();
   if (selectedId) { const p = contracts.find(x => x.contract_id === selectedId); if (p) renderDetail(p); }
+}
+
+function renderExcludedNote(ep) {
+  const el = document.getElementById("excludedNote");
+  if (!ep || ep.total_excluded <= 0) { el.classList.remove("show"); el.innerHTML = ""; return; }
+  const names = ep.items.map(i => i.contract_id).join(", ");
+  el.innerHTML = `<b>⚑ ${fmt(ep.total_excluded)} excluded from the totals pending review.</b>
+    The deferred revenue, forecast, and close figures above intentionally leave out ${ep.items.length}
+    contract(s) — ${names} — whose obligations couldn't be priced or classified with confidence from the
+    contract text. They stay out of the numbers until a person resolves them, so the totals are
+    deliberately incomplete rather than padded with a guess.`;
+  el.classList.add("show");
 }
 
 function renderKPIs(agg, rpo) {
@@ -251,6 +274,18 @@ function renderRPO(rpo) {
 const BADGE_LABEL = { one_time: "One-Time", subscription: "Subscription", bundled: "Bundled",
                       modification: "⚠ Modified", variable: "≈ Variable" };
 
+function methodsCell(p) {
+  const methods = new Set();
+  let pending = false;
+  p.obligations.forEach(o => {
+    if (o.excluded) pending = true;
+    else methods.add(o.method === "point_in_time" ? "PIT" : "OT");
+  });
+  let s = [...methods].join(" + ");
+  if (pending) s += (s ? " · " : "") + '<span class="chip pending">⚑ review</span>';
+  return s || "—";
+}
+
 function renderTable() {
   const tbody = document.querySelector("#contractTable tbody");
   const rows = contracts.filter(p => filter === "all" || p.category === filter);
@@ -261,7 +296,7 @@ function renderTable() {
       <td>${p.start_date} → ${p.end_date}</td>
       <td class="num">${fmt(p.total_price)}</td>
       <td class="num">${p.obligations.length}</td>
-      <td>${[...new Set(p.obligations.map(o => o.method === "point_in_time" ? "PIT" : "OT"))].join(" + ")}${p.variable_note ? " + usage" : ""}</td>
+      <td>${methodsCell(p)}</td>
       <td>${p.deletable ? `<button class="del" data-del="${p.contract_id}" title="Delete this contract">🗑</button>` : ""}</td>
     </tr>`).join("");
   tbody.querySelectorAll("tr").forEach(tr => tr.addEventListener("click", e => {
@@ -307,26 +342,47 @@ function renderDetail(p) {
   el.classList.add("open");
   document.getElementById("detailTitle").textContent =
     `${p.contract_id} — ${p.customer} (${p.start_date} → ${p.end_date}, ${fmt(p.total_price)})`;
+  const money = v => (v === null || v === undefined) ? "—" : fmt(v);
   let html = `
     <h3 style="margin:8px 0">Performance Obligations & Price Allocation</h3>
     <table><thead><tr><th>Obligation</th><th>Type</th><th>Method</th>
       <th class="num">Standalone Price</th><th class="num">Allocated Price</th></tr></thead><tbody>
     ${p.obligations.map(o => `<tr>
       <td>${o.obligation_id}${o.added_by_modification ? ' <span class="badge modification">added by mod</span>' : ""}</td>
-      <td>${o.type}</td><td>${o.method}</td>
-      <td class="num">${fmt(o.standalone_price_estimate)}</td>
-      <td class="num">${fmt(o.allocated_price)}</td></tr>`).join("")}
+      <td>${o.type}</td><td>${o.excluded ? '<span class="chip pending">pending review</span>' : o.method}</td>
+      <td class="num">${money(o.standalone_price_estimate)}</td>
+      <td class="num">${money(o.allocated_price)}</td></tr>`).join("")}
     </tbody></table>`;
   html += p.obligations.map(o => {
     const r = p.rationales[o.obligation_id];
     if (!r) return "";
     const conf = r.confidence ? `<span class="chip ${r.confidence}">${r.confidence} confidence</span>` : "";
     const cite = r.rule_citation ? `<div class="cite">Rule applied: ${r.rule_citation}</div>` : "";
-    return `<div class="rationale"><b>${o.obligation_id}</b>${conf} — ${r.text}${cite}
+    const cls = o.excluded ? "flag" : "rationale";
+    return `<div class="${cls}"><b>${o.obligation_id}</b>${conf} — ${r.text}${cite}
       <div class="src">Rationale source: ${r.source}</div></div>`;
   }).join("");
   if (p.modification_note) html += `<div class="note">⚠ ${p.modification_note}</div>`;
   if (p.variable_note) html += `<div class="note">≈ ${p.variable_note}</div>`;
+
+  // Resolve form — only for the visitor's own uploaded contracts that have
+  // flagged obligations. Seeds stay flagged as permanent demos.
+  const flagged = p.obligations.filter(o => o.excluded);
+  if (p.deletable && flagged.length) {
+    html += `<div class="resolvebox"><b>Resolve pricing</b> — supply the missing standalone price and
+      delivery timing for each flagged obligation, and it will flow into the deferred revenue, forecast,
+      and close totals.
+      ${flagged.map(o => {
+        const n = o.obligation_id.split("-OB")[1];
+        return `<div class="row" data-ob="${n}">
+          <span style="min-width:180px">${o.obligation_id} — ${o.type}</span>
+          <input type="number" min="0" step="0.01" placeholder="Standalone price" class="rprice">
+          <select class="rtype"><option value="over_time">over_time</option><option value="one_time">one_time</option></select>
+        </div>`;
+      }).join("")}
+      <div class="row"><button id="resolveBtn" data-id="${p.contract_id}">Resolve & include in totals</button></div>
+    </div>`;
+  }
   html += `
     <h3 style="margin:14px 0 8px">Deferred Revenue by Month</h3>
     <div class="scroll"><table><thead><tr><th>Month</th><th class="num">Beginning</th>
@@ -343,7 +399,34 @@ function renderDetail(p) {
       <td class="num">${fmt(j.amount)}</td><td>${j.memo}</td></tr>`).join("")}
     </tbody></table></div>`;
   document.getElementById("detailBody").innerHTML = html;
+  const rb = document.getElementById("resolveBtn");
+  if (rb) rb.addEventListener("click", () => resolveContract(rb.dataset.id));
   el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+async function resolveContract(id) {
+  const resolutions = {};
+  document.querySelectorAll("#detailBody .resolvebox .row[data-ob]").forEach(row => {
+    const price = row.querySelector(".rprice").value;
+    const dtype = row.querySelector(".rtype").value;
+    if (price) resolutions[row.dataset.ob] = { standalone_price: parseFloat(price), delivery_type: dtype };
+  });
+  if (!Object.keys(resolutions).length) { alert("Enter at least one standalone price."); return; }
+  const status = document.getElementById("uploadStatus");
+  status.className = ""; status.textContent = `Resolving ${id}…`;
+  try {
+    const r = await fetch(`/api/contracts/${encodeURIComponent(id)}/resolve`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ resolutions }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    status.className = "ok";
+    status.textContent = `✓ ${id} resolved — now included in the deferred revenue, forecast, and close totals.`;
+    await loadAll(); await runClose();
+  } catch (err) {
+    status.className = "err"; status.textContent = "✗ " + err.message;
+  }
 }
 
 async function runClose() {

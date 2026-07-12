@@ -145,20 +145,77 @@ check("clear short description not mislabeled sparse",
       "too sparse" not in a_distinct["confidence_reason"].lower(), a_distinct["confidence_reason"])
 
 # ---------------------------------------------------------------------------
-print("\nSeed regression — all seeds still classify high, no spurious reviews")
+print("\nProse seed set — flagging, exclusion & modification")
 # ---------------------------------------------------------------------------
 import json
+from engine.core import excluded_pending, rpo_forecast
 seeds = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                     "data", "seed_contracts.json")))
-counts = {"high": 0, "medium": 0, "low": 0}
-reviews = 0
-for s in seeds:
-    p = add_rationales(process_contract(s))
-    for ob in p["obligations"]:
-        counts[ob["confidence"]] += 1
-    reviews += len(p["needs_review"])
-check("all 30 seed obligations high confidence", counts["high"] == 30, str(counts))
-check("no seed contracts flagged for review", reviews == 0, f"{reviews} flagged")
+sp = [add_rationales(process_contract(s)) for s in seeds]
+by_id = {p["contract_id"]: p for p in sp}
+
+check("exactly 10 seed contracts", len(sp) == 10, str(len(sp)))
+# Contracts 3, 8, 9 must NOT come out with a confident, silent classification.
+for cid in ("ORD-2603", "ORD-2609"):
+    p = by_id[cid]
+    check(f"{cid} fully flagged (no recognized amount)",
+          p["recognized_amount"] == 0 and all(o["excluded"] for o in p["obligations"]),
+          f"recognized={p['recognized_amount']}")
+c8 = by_id["ORD-2608"]
+check("ORD-2608 base recognized, variable flagged",
+      c8["recognized_amount"] == 36000 and any(o["excluded"] for o in c8["obligations"])
+      and c8["category"] == "variable")
+
+# Flagged obligations are excluded from every aggregate.
+ep = excluded_pending(sp)
+check("excluded-pending total = $198,000 across 3 contracts",
+      ep["total_excluded"] == 198000 and len(ep["items"]) == 3, str(ep["total_excluded"]))
+rpo = rpo_forecast(sp, "2026-06", 12)
+check("flagged contracts absent from RPO forecast",
+      "ORD-2603" not in rpo["by_contract"] and "ORD-2609" not in rpo["by_contract"])
+
+# Modification on seed #4 is applied (prospective reallocation), not dropped.
+c4 = by_id["ORD-2604"]
+check("ORD-2604 modification applied (2 obligations + note)",
+      len(c4["obligations"]) == 2 and c4["modification_note"] is not None)
+
+# Every contract's deferred revenue drains to zero (included portions tie out).
+check("all seed contracts: final deferred revenue = 0",
+      all(abs(p["deferred_revenue"][-1]["ending_balance"] if p["deferred_revenue"] else 0) < 0.01 for p in sp))
+
+# Clean (non-flagged) obligations are confidently classified (high or medium,
+# never low); flagged obligations are low. Unambiguous ones (#1 SaaS, #2/#10
+# hardware) should be high specifically.
+clean_not_low = all(o["confidence"] in ("high", "medium")
+                    for p in sp for o in p["obligations"] if not o.get("excluded"))
+check("clean obligations classified confidently (not low)", clean_not_low)
+unambiguous_high = all(by_id[cid]["obligations"][0]["confidence"] == "high"
+                       for cid in ("ORD-2601", "ORD-2602", "ORD-2610"))
+check("unambiguous SaaS/hardware obligations are high confidence", unambiguous_high)
+flagged_low = all(o["confidence"] == "low"
+                  for p in sp for o in p["obligations"] if o.get("excluded"))
+check("all flagged obligations are low confidence", flagged_low)
+
+# ---------------------------------------------------------------------------
+print("\nBackward compatibility — structured label:value PDF still parses")
+# ---------------------------------------------------------------------------
+from engine.extract import extract_contract, is_structured, _pdf_text
+struct = _pdf([
+    "Contract ID: C-LEGACY", "Customer: Legacy Structured Co", "Start Date: 2026-01-01",
+    "End Date: 2026-12-31", "Total Price: $60,000.00",
+    "Type: subscription | Description: 12-month platform subscription | "
+    "Standalone Price: $60,000.00 | Delivery: over_time"])
+struct.seek(0)
+check("legacy structured PDF detected as structured", is_structured(_pdf_text(struct)))
+struct.seek(0)
+lc = extract_contract(struct, "legacy.pdf")
+check("legacy structured PDF still extracts correctly",
+      lc["contract_id"] == "C-LEGACY" and lc["total_price"] == 60000.0
+      and lc["deliverables"][0]["delivery_type"] == "over_time")
+prose = _pdf(["Northstar Analytics, Inc.", "Order Form - Platform Subscription",
+              "Vendor shall provide Customer access to the Platform for a period of twelve (12) months.",
+              "The subscription fee is seventy-two thousand dollars ($72,000)."])
+check("prose PDF detected as prose (routes to AI extractor)", not is_structured(_pdf_text(prose)))
 
 # ---------------------------------------------------------------------------
 print(f"\n{'='*50}")

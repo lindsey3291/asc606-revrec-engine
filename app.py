@@ -12,7 +12,7 @@ summing the cached per-contract series, so adding contract #21 never
 reprocesses contracts #1-20.
 
 Multi-user: uploaded contracts are scoped to a visitor cookie. Every
-visitor sees the 20 seed contracts plus only their own uploads.
+visitor sees the 10 seed contracts plus only their own uploads.
 """
 from __future__ import annotations
 
@@ -30,12 +30,13 @@ from engine.core import (
     ContractValidationError,
     aggregate_deferred_revenue,
     aggregate_recognized_by_method,
+    excluded_pending,
     month_end_close_batch,
     process_contract,
     rpo_forecast,
 )
 from engine.explain import add_rationales
-from engine.pdf_contract import parse_contract_pdf
+from engine.extract import extract_contract
 from engine.rag import get_doc
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -87,34 +88,37 @@ def init_db():
             PRIMARY KEY (owner, contract_id)
         )
     """)
-    seeded = conn.execute("SELECT COUNT(*) FROM contracts WHERE owner = 'seed'").fetchone()[0]
-    if seeded == 0:
-        with open(os.path.join(BASE_DIR, "data", "seed_contracts.json")) as f:
-            seeds = json.load(f)
+    with open(os.path.join(BASE_DIR, "data", "seed_contracts.json")) as f:
+        seeds = json.load(f)
+    want_ids = {c["contract_id"] for c in seeds}
+    have_ids = {r[0] for r in conn.execute("SELECT contract_id FROM contracts WHERE owner='seed'").fetchall()}
+
+    # Re-seed whenever the seed set on disk differs from what's stored (e.g.
+    # the seed contracts were replaced). Visitor uploads are never touched.
+    if want_ids != have_ids:
+        conn.execute("DELETE FROM contracts WHERE owner='seed'")
         now = datetime.now(timezone.utc).isoformat()
         for c in seeds:
             processed = add_rationales(process_contract(c))
-            conn.execute(
-                "INSERT INTO contracts VALUES (?, ?, ?, ?, ?)",
-                ("seed", c["contract_id"], json.dumps(c), json.dumps(processed), now),
-            )
+            conn.execute("INSERT INTO contracts VALUES (?, ?, ?, ?, ?)",
+                         ("seed", c["contract_id"], json.dumps(c), json.dumps(processed), now))
         conn.commit()
         print(f"Seeded {len(seeds)} contracts into {DB_PATH}")
 
-    # One-time migration: rows processed before the RAG/confidence release
-    # lack the new fields — reprocess them from their stored raw contract.
+    # Reprocess any rows (visitor uploads, or seeds after an engine change)
+    # whose cached output predates the current schema, so every row carries
+    # the latest fields (excluded_amount, needs_review, confidence, ...).
     migrated = 0
-    for owner, cid, raw in conn.execute("SELECT owner, contract_id, raw_json FROM contracts").fetchall():
-        row = conn.execute("SELECT processed_json FROM contracts WHERE owner=? AND contract_id=?",
-                           (owner, cid)).fetchone()
-        if "needs_review" not in json.loads(row[0]):
+    for owner, cid, raw, proc in conn.execute(
+            "SELECT owner, contract_id, raw_json, processed_json FROM contracts").fetchall():
+        if "excluded_amount" not in json.loads(proc):
             processed = add_rationales(process_contract(json.loads(raw)))
             conn.execute("UPDATE contracts SET processed_json=? WHERE owner=? AND contract_id=?",
                          (json.dumps(processed), owner, cid))
             migrated += 1
     if migrated:
         conn.commit()
-        print(f"Migrated {migrated} contracts to the RAG/confidence schema")
+        print(f"Reprocessed {migrated} contracts to the current schema")
     conn.close()
 
 
@@ -199,7 +203,9 @@ def upload_contract():
             f = request.files["file"]
             name = (f.filename or "").lower()
             if name.endswith(".pdf"):
-                payload = parse_contract_pdf(f)
+                # Auto-detects structured vs prose and routes accordingly;
+                # both produce the same internal contract schema.
+                payload = extract_contract(f, name)
             else:
                 payload = json.load(f)
         else:
@@ -207,7 +213,7 @@ def upload_contract():
     except ContractValidationError as e:
         return jsonify({"error": str(e)}), 400
     except Exception:
-        return jsonify({"error": "Upload a contract PDF (see the sample order form) or a JSON file"}), 400
+        return jsonify({"error": "Upload a contract PDF (structured order form or prose) or a JSON file"}), 400
     if isinstance(payload, list):
         if len(payload) != 1:
             return jsonify({"error": "Upload one contract at a time"}), 400
@@ -239,7 +245,7 @@ def upload_contract():
 def delete_contract(contract_id):
     """Delete one of THIS visitor's uploaded contracts, fully.
 
-    Only the visitor's own uploads are deletable — the 20 seed contracts are
+    Only the visitor's own uploads are deletable — the 10 seed contracts are
     shared and stay visible to everyone. Deletion removes the row from the
     database; because every aggregate view (deferred revenue series, RPO
     forecast, close batch, needs-review) is computed on demand from the
@@ -251,7 +257,7 @@ def delete_contract(contract_id):
         "SELECT 1 FROM contracts WHERE owner='seed' AND contract_id=?", (contract_id,)
     ).fetchone()
     if seed:
-        return jsonify({"error": "The 20 sample contracts are shared and can't be deleted."}), 403
+        return jsonify({"error": "The sample contracts are shared and can't be deleted."}), 403
     cur = db.execute(
         "DELETE FROM contracts WHERE owner=? AND contract_id=?", (visitor_id(), contract_id)
     )
@@ -261,6 +267,49 @@ def delete_contract(contract_id):
     return jsonify({"deleted": contract_id}), 200
 
 
+@app.route("/api/contracts/<contract_id>/resolve", methods=["POST"])
+def resolve_contract(contract_id):
+    """Resolve a flagged contract by supplying the missing standalone prices /
+    delivery types for its excluded obligations. Re-processes the contract so
+    the now-priced obligations flow into the aggregates normally. Own uploads
+    only — the shared sample contracts intentionally stay flagged as demos.
+
+    Body: {"resolutions": {"<OB number>": {"standalone_price": N, "delivery_type": "one_time"|"over_time"}, ...}}
+    """
+    db = get_db()
+    row = db.execute(
+        "SELECT raw_json FROM contracts WHERE owner=? AND contract_id=?",
+        (visitor_id(), contract_id)).fetchone()
+    if not row:
+        return jsonify({"error": "Only your own uploaded contracts can be resolved "
+                                 "(the sample contracts are shared demos)."}), 403
+    raw = json.loads(row["raw_json"])
+    resolutions = (request.get_json(force=True, silent=True) or {}).get("resolutions") or {}
+    for i, d in enumerate(raw["deliverables"]):
+        key = str(i + 1)
+        if key in resolutions and d.get("review"):
+            r = resolutions[key]
+            try:
+                price = float(r.get("standalone_price"))
+            except (TypeError, ValueError):
+                price = 0
+            dtype = r.get("delivery_type")
+            if price <= 0 or dtype not in ("one_time", "over_time"):
+                return jsonify({"error": f"Obligation {key}: provide a positive standalone "
+                                         "price and a delivery type (one_time or over_time)."}), 400
+            d["standalone_price_estimate"] = price
+            d["delivery_type"] = dtype
+            d.pop("review", None)
+    try:
+        processed = add_rationales(process_contract(raw))
+    except ContractValidationError as e:
+        return jsonify({"error": str(e)}), 400
+    db.execute("UPDATE contracts SET raw_json=?, processed_json=? WHERE owner=? AND contract_id=?",
+               (json.dumps(raw), json.dumps(processed), visitor_id(), contract_id))
+    db.commit()
+    return jsonify(processed), 200
+
+
 @app.route("/api/aggregates")
 def aggregates():
     scope = load_scope()
@@ -268,6 +317,7 @@ def aggregates():
         "deferred_revenue": aggregate_deferred_revenue(scope),
         "recognized_by_method": aggregate_recognized_by_method(scope),
         "contract_count": len(scope),
+        "excluded_pending": excluded_pending(scope),
     })
 
 

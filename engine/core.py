@@ -107,11 +107,19 @@ def validate_contract(contract: dict) -> None:
         for f in REQUIRED_DELIVERABLE_FIELDS:
             if f not in d:
                 raise ContractValidationError(f"Deliverable {i + 1} missing field '{f}'")
-        if d["delivery_type"] not in VALID_DELIVERY_TYPES:
+        flagged = bool(d.get("review"))
+        # A flagged obligation (missing/ambiguous SSP, variable consideration,
+        # ambiguous timing) is carried but excluded from every calculation, so
+        # it is allowed to have a null price and an "unknown" delivery type.
+        if d["delivery_type"] not in VALID_DELIVERY_TYPES and not (flagged and d["delivery_type"] == "unknown"):
             raise ContractValidationError(
                 f"Deliverable {i + 1} has invalid delivery_type '{d['delivery_type']}'"
             )
-        if float(d["standalone_price_estimate"]) <= 0:
+        ssp = d["standalone_price_estimate"]
+        if flagged:
+            if ssp is not None and float(ssp) < 0:
+                raise ContractValidationError(f"Deliverable {i + 1} standalone_price_estimate cannot be negative")
+        elif ssp is None or float(ssp) <= 0:
             raise ContractValidationError(f"Deliverable {i + 1} standalone_price_estimate must be positive")
     mod = contract.get("modification")
     if mod is not None:
@@ -132,11 +140,13 @@ def validate_contract(contract: dict) -> None:
 def _classify_category(contract: dict) -> str:
     if contract.get("modification"):
         return "modification"
-    if contract.get("variable_consideration"):
+    delivs = contract["deliverables"]
+    if contract.get("variable_consideration") or \
+       any((d.get("review") or {}).get("kind") == "variable_consideration" for d in delivs):
         return "variable"
-    if len(contract["deliverables"]) > 1:
+    if len(delivs) > 1:
         return "bundled"
-    return "subscription" if contract["deliverables"][0]["delivery_type"] == "over_time" else "one_time"
+    return "subscription" if delivs[0]["delivery_type"] == "over_time" else "one_time"
 
 
 def _allocate(total_cents: int, ssp_cents: list[int]) -> list[int]:
@@ -261,34 +271,62 @@ def process_contract(contract: dict) -> dict:
     end_m = month_key(contract["end_date"])
     months = month_span(start_m, end_m)
 
-    # Step 2: identify performance obligations. Step 4: allocate price by SSP.
-    ssp_cents = [_cents(d["standalone_price_estimate"]) for d in delivs]
-    allocated = _allocate(total_cents, ssp_cents)
+    # Step 2: identify performance obligations. Step 4: allocate the price.
+    # An obligation carrying a "review" marker (missing/ambiguous standalone
+    # price, variable consideration, ambiguous timing) is EXCLUDED: it gets an
+    # obligation record but no allocation and no schedule, so it contributes
+    # nothing to deferred revenue, the forecast, or the close batch until a
+    # person resolves it. Nothing is ever allocated to it by a silent guess.
+    included_idx = [i for i, d in enumerate(delivs) if not d.get("review")]
+    flagged_idx = [i for i, d in enumerate(delivs) if d.get("review")]
+
+    if flagged_idx:
+        # Mixed/flagged contract: do NOT divide the stated total across
+        # obligations (part of that total belongs to the excluded items). Each
+        # included obligation must carry its own explicitly-stated price.
+        alloc_by_idx = {i: _cents(delivs[i]["standalone_price_estimate"]) for i in included_idx}
+    else:
+        # Clean contract: allocate the transaction price across all obligations
+        # in proportion to standalone selling prices (handles bundle discounts).
+        ssp_all = [_cents(d["standalone_price_estimate"]) for d in delivs]
+        alloc_list = _allocate(total_cents, ssp_all)
+        alloc_by_idx = {i: alloc_list[i] for i in range(len(delivs))}
 
     obligations, schedule = [], []
     for i, d in enumerate(delivs):
-        method = "point_in_time" if d["delivery_type"] == "one_time" else "over_time"
-        ob = {
-            "obligation_id": f"{cid}-OB{i + 1}",
-            "type": d["type"],
-            "description": d["description"],
-            "ssp_cents": ssp_cents[i],
-            "allocated_cents": allocated[i],
-            "method": method,
-        }
-        obligations.append(ob)
-        # Step 5: recognition schedule.
-        if method == "point_in_time":
-            schedule.append({
-                "month": start_m, "obligation_id": ob["obligation_id"],
-                "amount_cents": allocated[i], "method": "point_in_time",
+        ob_id = f"{cid}-OB{i + 1}"
+        if d.get("review"):
+            rv = d["review"]
+            obligations.append({
+                "obligation_id": ob_id, "type": d["type"], "description": d["description"],
+                "ssp_cents": None, "allocated_cents": None, "method": "pending_review",
+                "excluded": True, "review_kind": rv.get("kind"), "review_reason": rv.get("reason"),
+                "review_excluded_cents": _cents(rv["excluded_amount"]) if rv.get("excluded_amount") is not None else None,
             })
+            continue
+        method = "point_in_time" if d["delivery_type"] == "one_time" else "over_time"
+        alloc = alloc_by_idx[i]
+        obligations.append({
+            "obligation_id": ob_id, "type": d["type"], "description": d["description"],
+            "ssp_cents": _cents(d["standalone_price_estimate"]), "allocated_cents": alloc, "method": method,
+        })
+        # Step 5: recognition schedule (included obligations only).
+        if method == "point_in_time":
+            schedule.append({"month": start_m, "obligation_id": ob_id,
+                             "amount_cents": alloc, "method": "point_in_time"})
         else:
-            for m, amt in zip(months, _spread(allocated[i], len(months))):
-                schedule.append({
-                    "month": m, "obligation_id": ob["obligation_id"],
-                    "amount_cents": amt, "method": "over_time",
-                })
+            for m, amt in zip(months, _spread(alloc, len(months))):
+                schedule.append({"month": m, "obligation_id": ob_id,
+                                 "amount_cents": amt, "method": "over_time"})
+
+    # Recognizable (allocable) consideration — only the included obligations.
+    recognized_total_cents = sum(alloc_by_idx.get(i, 0) for i in included_idx)
+    # Amount deliberately excluded from every total pending human review.
+    if not included_idx:
+        excluded_cents = total_cents          # whole contract un-allocatable
+    else:
+        excluded_cents = sum((ob.get("review_excluded_cents") or 0)
+                             for ob in obligations if ob.get("excluded"))
 
     modification_note = None
     if contract.get("modification"):
@@ -314,12 +352,16 @@ def process_contract(contract: dict) -> dict:
     schedule.sort(key=lambda e: (e["month"], e["obligation_id"]))
 
     # Journal entries -------------------------------------------------------
-    journal = [{
-        "date": contract["start_date"], "month": start_m, "entry_type": "cash_receipt",
-        "debit_account": "Cash", "credit_account": "Deferred Revenue",
-        "amount_cents": total_cents,
-        "memo": f"{cid} — cash received on contract signing ({contract['customer']})",
-    }]
+    # Cash received is the recognizable (allocable) consideration only —
+    # excluded/flagged amounts never post until resolved.
+    journal = []
+    if recognized_total_cents > 0:
+        journal.append({
+            "date": contract["start_date"], "month": start_m, "entry_type": "cash_receipt",
+            "debit_account": "Cash", "credit_account": "Deferred Revenue",
+            "amount_cents": recognized_total_cents,
+            "memo": f"{cid} — cash received on contract signing ({contract['customer']})",
+        })
     if contract.get("modification"):
         mod = contract["modification"]
         journal.append({
@@ -349,7 +391,7 @@ def process_contract(contract: dict) -> dict:
     journal.sort(key=lambda j: (j["date"], j["entry_type"] != "cash_receipt"))
 
     # Deferred revenue table -------------------------------------------------
-    cash_in = {start_m: total_cents}
+    cash_in = {start_m: recognized_total_cents} if recognized_total_cents > 0 else {}
     if contract.get("modification"):
         mm = month_key(contract["modification"]["date"])
         cash_in[mm] = cash_in.get(mm, 0) + _cents(contract["modification"]["added_price"])
@@ -378,16 +420,23 @@ def process_contract(contract: dict) -> dict:
         "start_date": contract["start_date"],
         "end_date": contract["end_date"],
         "total_price": _dollars(total_cents),
+        "recognized_amount": _dollars(recognized_total_cents),
+        "excluded_amount": _dollars(excluded_cents),
         "category": _classify_category(contract),
         "term_months": len(months),
         "obligations": [{
             "obligation_id": ob["obligation_id"],
             "type": ob["type"],
             "description": ob["description"],
-            "standalone_price_estimate": _dollars(ob["ssp_cents"]),
-            "allocated_price": _dollars(ob["allocated_cents"]),
+            "standalone_price_estimate": None if ob["ssp_cents"] is None else _dollars(ob["ssp_cents"]),
+            "allocated_price": None if ob["allocated_cents"] is None else _dollars(ob["allocated_cents"]),
             "method": ob["method"],
             "added_by_modification": bool(ob.get("added_by_modification")),
+            "excluded": bool(ob.get("excluded")),
+            "review_kind": ob.get("review_kind"),
+            "review_reason": ob.get("review_reason"),
+            "review_excluded_amount": None if ob.get("review_excluded_cents") is None
+                                      else _dollars(ob["review_excluded_cents"]),
         } for ob in obligations],
         "schedule": [{
             "month": e["month"], "obligation_id": e["obligation_id"],
@@ -422,6 +471,28 @@ def _all_months(processed_list) -> list[str]:
     if not keys:
         return []
     return month_span(min(keys), max(keys))
+
+
+def excluded_pending(processed_list) -> dict:
+    """Amounts deliberately excluded from the deferred-revenue, forecast, and
+    close totals because an obligation is flagged for human review. Flagged
+    obligations never produce schedule/journal/DR rows, so they are already
+    absent from every other aggregate; this just surfaces how much is being
+    held back and why, so the incomplete totals read as intentional."""
+    items, total = [], 0.0
+    for p in processed_list:
+        amt = p.get("excluded_amount", 0) or 0
+        flagged = [o for o in p["obligations"] if o.get("excluded")]
+        if flagged:
+            total += amt
+            items.append({
+                "contract_id": p["contract_id"],
+                "customer": p["customer"],
+                "excluded_amount": round(amt, 2),
+                "obligations": [{"obligation_id": o["obligation_id"], "type": o["type"],
+                                 "reason": o.get("review_reason")} for o in flagged],
+            })
+    return {"total_excluded": round(total, 2), "items": items}
 
 
 def aggregate_deferred_revenue(processed_list) -> list[dict]:

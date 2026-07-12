@@ -129,9 +129,12 @@ def assess_obligation(ob: dict, siblings: list[dict] | None = None) -> dict:
     # (B) Allocation concern — tied standalone selling prices. This is its own
     # explicit check with its own message; it is NOT conflated with the
     # description checks above, and it does not change the method confidence.
-    if siblings and len(siblings) > 1:
+    # (Only meaningful for priced obligations — excluded/unpriced ones are
+    # handled separately in add_rationales.)
+    if siblings and len(siblings) > 1 and ob.get("standalone_price_estimate") is not None:
         ties = [o for o in siblings
                 if o is not ob
+                and o.get("standalone_price_estimate") is not None
                 and abs(o["standalone_price_estimate"] - ob["standalone_price_estimate"]) < 0.005]
         if ties:
             reviews.append(
@@ -162,8 +165,11 @@ def _citation_for(ob: dict, processed: dict) -> str:
 
 def _template_rationale(ob: dict, processed: dict) -> str:
     total = processed["total_price"]
-    ssp_sum = sum(o["standalone_price_estimate"] for o in processed["obligations"])
-    pct = ob["standalone_price_estimate"] / ssp_sum * 100 if ssp_sum else 0
+    # Only priced (non-excluded) obligations participate in the allocation.
+    ssp_sum = sum(o["standalone_price_estimate"] for o in processed["obligations"]
+                  if o.get("standalone_price_estimate") is not None)
+    own_ssp = ob.get("standalone_price_estimate") or 0
+    pct = own_ssp / ssp_sum * 100 if ssp_sum else 0
     if ob["method"] == "point_in_time":
         method_part = (
             "Recognized at a point in time per the reference guide's Step 5: none of the three "
@@ -279,6 +285,25 @@ def add_rationales(processed: dict) -> dict:
     rationales, review_items = {}, []
     for ob in obligations:
         ob_id = ob["obligation_id"]
+
+        # Excluded obligations (flagged during extraction: unpriced bundle,
+        # variable consideration, ambiguous timing) are not classified or
+        # allocated — they carry the extraction's own review reason straight
+        # into the queue at low confidence, and are excluded from all totals.
+        if ob.get("excluded"):
+            reason = ob.get("review_reason") or "Flagged for human review."
+            ob["confidence"] = "low"
+            rationales[ob_id] = {
+                "text": ("Flagged for review, not auto-classified or allocated: " + reason),
+                "source": "extraction flag",
+                "rule_citation": "Held out of Steps 4–5 pending human review (no reliable allocation/timing).",
+                "confidence": "low",
+                "confidence_reason": reason,
+            }
+            review_items.append({"obligation_id": ob_id, "type": ob["type"],
+                                 "description": ob["description"], "reason": reason})
+            continue
+
         assessment = assess_obligation(ob, obligations)
 
         if ai and ob_id in ai:
