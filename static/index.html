@@ -67,22 +67,22 @@
 <body>
 
 <h1>ASC 606 Revenue Recognition Engine</h1>
-<p class="sub">Deterministic rev rec for 20+ mock B2B contracts — obligations, price allocation, journal entries,
-deferred revenue, automated month-end close, and known-revenue forecast. AI explains the output; rules make the decisions.</p>
+<p class="sub">Deterministic revenue recognition for 20+ B2B contracts — performance obligations, price allocation,
+journal entries, deferred revenue, automated month-end close, and known-revenue forecasting. AI explains the output; rules make the decisions.</p>
 
 <div class="kpis" id="kpis"></div>
 
 <div class="grid">
   <div class="card full">
-    <h2>Total deferred revenue balance (balance sheet liability, all contracts)</h2>
+    <h2>Total Deferred Revenue Balance (Balance Sheet Liability, All Contracts)</h2>
     <div class="chartbox"><canvas id="drChart"></canvas></div>
   </div>
   <div class="card">
-    <h2>Revenue recognized by month — point-in-time vs over-time vs usage</h2>
+    <h2>Revenue Recognized by Month — Point-in-Time vs. Over-Time vs. Usage</h2>
     <div class="chartbox"><canvas id="methodChart"></canvas></div>
   </div>
   <div class="card">
-    <h2>Known revenue forecast — contracted only (RPO)</h2>
+    <h2>Known Revenue Forecast — Contracted Revenue Only (RPO)</h2>
     <div class="chartbox"><canvas id="rpoChart"></canvas></div>
     <p class="disclaimer" id="rpoDisclaimer"></p>
   </div>
@@ -91,10 +91,11 @@ deferred revenue, automated month-end close, and known-revenue forecast. AI expl
 <div class="grid">
   <div class="card full">
     <div class="controls">
-      <h2 style="margin:0; flex:1;">Month-end close batch</h2>
-      <label for="closeMonth" style="color:var(--muted)">Close month:</label>
+      <h2 style="margin:0; flex:1;">Month-End Close Batch</h2>
+      <label for="closeMonth" style="color:var(--muted)">Close Month:</label>
       <input type="month" id="closeMonth">
-      <button id="runClose">Generate batch</button>
+      <button id="runClose">Generate Batch</button>
+      <button id="downloadCsv" title="SAP-style journal entry upload file: posting keys, G/L accounts, cost center, profit center">⬇ Download SAP CSV</button>
     </div>
     <div id="closeSummary" class="sub"></div>
     <div id="closeFlags"></div>
@@ -111,14 +112,15 @@ deferred revenue, automated month-end close, and known-revenue forecast. AI expl
       <h2 style="margin:0; flex:1;">Contracts</h2>
       <div class="filters" id="filters">
         <button data-f="all" class="active">All</button>
-        <button data-f="one_time">One-time</button>
+        <button data-f="one_time">One-Time</button>
         <button data-f="subscription">Subscription</button>
         <button data-f="bundled">Bundled</button>
         <button data-f="modification">⚠ Modified</button>
         <button data-f="variable">≈ Variable</button>
       </div>
-      <input type="file" id="uploadFile" accept=".json" style="display:none">
-      <button id="uploadBtn">⬆ Upload contract (JSON)</button>
+      <a href="/static/sample_contract.pdf" download style="color:var(--muted); font-size:13px;">Sample Contract (PDF)</a>
+      <input type="file" id="uploadFile" accept=".pdf,.json" style="display:none">
+      <button id="uploadBtn">⬆ Upload Contract (PDF)</button>
       <span id="uploadStatus"></span>
     </div>
     <div class="scroll"><table id="contractTable">
@@ -164,9 +166,9 @@ function renderKPIs(agg, rpo) {
   const now = new Date().toISOString().slice(0, 7);
   const cur = agg.deferred_revenue.find(r => r.month === now) || agg.deferred_revenue.at(-1);
   document.getElementById("kpis").innerHTML = `
-    <div class="kpi"><div class="v">${agg.contract_count}</div><div class="l">contracts</div></div>
-    <div class="kpi"><div class="v">${fmt0(cur ? cur.deferred_revenue : 0)}</div><div class="l">deferred revenue — ${cur ? cur.month : "n/a"}</div></div>
-    <div class="kpi"><div class="v">${fmt0(rpo.total_known_revenue)}</div><div class="l">known revenue, next 12 mo (RPO)</div></div>`;
+    <div class="kpi"><div class="v">${agg.contract_count}</div><div class="l">Contracts</div></div>
+    <div class="kpi"><div class="v">${fmt0(cur ? cur.deferred_revenue : 0)}</div><div class="l">Deferred Revenue — ${cur ? cur.month : "n/a"}</div></div>
+    <div class="kpi"><div class="v">${fmt0(rpo.total_known_revenue)}</div><div class="l">Known Revenue, Next 12 Months (RPO)</div></div>`;
 }
 
 function renderDR(series) {
@@ -189,7 +191,7 @@ function renderMethod(series) {
     data: { labels: series.map(r => r.month), datasets: [
       { label: "Point-in-time", data: series.map(r => r.point_in_time), backgroundColor: "#1a1a1a" },
       { label: "Over-time", data: series.map(r => r.over_time), backgroundColor: "#c9e85c" },
-      { label: "Usage (variable)", data: series.map(r => r.usage), backgroundColor: "#e0907f" },
+      { label: "Usage (Variable)", data: series.map(r => r.usage), backgroundColor: "#e0907f" },
     ]},
     options: { maintainAspectRatio: false,
       scales: { x: { stacked: true }, y: { stacked: true, ticks: { callback: v => fmt0(v) } } } },
@@ -210,8 +212,8 @@ function renderRPO(rpo) {
   });
 }
 
-const BADGE_LABEL = { one_time: "one-time", subscription: "subscription", bundled: "bundled",
-                      modification: "⚠ modified", variable: "≈ variable" };
+const BADGE_LABEL = { one_time: "One-Time", subscription: "Subscription", bundled: "Bundled",
+                      modification: "⚠ Modified", variable: "≈ Variable" };
 
 function renderTable() {
   const tbody = document.querySelector("#contractTable tbody");
@@ -238,9 +240,9 @@ function renderDetail(p) {
   document.getElementById("detailTitle").textContent =
     `${p.contract_id} — ${p.customer} (${p.start_date} → ${p.end_date}, ${fmt(p.total_price)})`;
   let html = `
-    <h3 style="margin:8px 0">Performance obligations & price allocation</h3>
+    <h3 style="margin:8px 0">Performance Obligations & Price Allocation</h3>
     <table><thead><tr><th>Obligation</th><th>Type</th><th>Method</th>
-      <th class="num">Standalone price</th><th class="num">Allocated price</th></tr></thead><tbody>
+      <th class="num">Standalone Price</th><th class="num">Allocated Price</th></tr></thead><tbody>
     ${p.obligations.map(o => `<tr>
       <td>${o.obligation_id}${o.added_by_modification ? ' <span class="badge modification">added by mod</span>' : ""}</td>
       <td>${o.type}</td><td>${o.method}</td>
@@ -250,19 +252,19 @@ function renderDetail(p) {
   html += p.obligations.map(o => {
     const r = p.rationales[o.obligation_id];
     return r ? `<div class="rationale"><b>${o.obligation_id}</b> — ${r.text}
-      <div class="src">rationale source: ${r.source}</div></div>` : "";
+      <div class="src">Rationale source: ${r.source}</div></div>` : "";
   }).join("");
   if (p.modification_note) html += `<div class="note">⚠ ${p.modification_note}</div>`;
   if (p.variable_note) html += `<div class="note">≈ ${p.variable_note}</div>`;
   html += `
-    <h3 style="margin:14px 0 8px">Deferred revenue by month</h3>
+    <h3 style="margin:14px 0 8px">Deferred Revenue by Month</h3>
     <div class="scroll"><table><thead><tr><th>Month</th><th class="num">Beginning</th>
-      <th class="num">Cash received</th><th class="num">Recognized</th><th class="num">Ending</th></tr></thead><tbody>
+      <th class="num">Cash Received</th><th class="num">Recognized</th><th class="num">Ending</th></tr></thead><tbody>
     ${p.deferred_revenue.map(r => `<tr><td>${r.month}</td>
       <td class="num">${fmt(r.beginning_balance)}</td><td class="num">${fmt(r.cash_received)}</td>
       <td class="num">${fmt(r.revenue_recognized)}</td><td class="num">${fmt(r.ending_balance)}</td></tr>`).join("")}
     </tbody></table></div>
-    <h3 style="margin:14px 0 8px">Journal entries</h3>
+    <h3 style="margin:14px 0 8px">Journal Entries</h3>
     <div class="scroll"><table><thead><tr><th>Date</th><th>Type</th><th>Debit</th><th>Credit</th>
       <th class="num">Amount</th><th>Memo</th></tr></thead><tbody>
     ${p.journal_entries.map(j => `<tr><td>${j.date}</td><td>${j.entry_type}</td>
@@ -303,21 +305,26 @@ document.getElementById("uploadFile").addEventListener("change", async e => {
   const status = document.getElementById("uploadStatus");
   status.className = ""; status.textContent = "Processing…";
   try {
-    const body = await file.text();
-    JSON.parse(body); // fail fast on invalid JSON
-    const r = await fetch("/api/contracts", { method: "POST", headers: { "Content-Type": "application/json" }, body });
+    const fd = new FormData();
+    fd.append("file", file);
+    const r = await fetch("/api/contracts", { method: "POST", body: fd });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || r.statusText);
     status.className = "ok";
     status.textContent = `✓ ${data.contract_id} added — charts, close batch, and forecast updated.`;
     selectedId = data.contract_id;
     await loadAll();
+    await runClose();
   } catch (err) {
     status.className = "err"; status.textContent = "✗ " + err.message;
   }
   e.target.value = "";
 });
 document.getElementById("runClose").addEventListener("click", runClose);
+document.getElementById("downloadCsv").addEventListener("click", () => {
+  const month = document.getElementById("closeMonth").value;
+  window.location.href = `/api/close-batch.csv?month=${month}`;
+});
 
 (async () => {
   document.getElementById("closeMonth").value = new Date().toISOString().slice(0, 7);

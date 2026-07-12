@@ -16,13 +16,15 @@ visitor sees the 20 seed contracts plus only their own uploads.
 """
 from __future__ import annotations
 
+import csv
+import io
 import json
 import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
 
-from flask import Flask, g, jsonify, request, send_from_directory
+from flask import Flask, Response, g, jsonify, request, send_from_directory
 
 from engine.core import (
     ContractValidationError,
@@ -33,6 +35,7 @@ from engine.core import (
     rpo_forecast,
 )
 from engine.explain import add_rationales
+from engine.pdf_contract import parse_contract_pdf
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -156,16 +159,26 @@ def get_contract(contract_id):
 
 @app.route("/api/contracts", methods=["POST"])
 def upload_contract():
-    """Upload a new contract (same JSON structure as the seed contracts).
+    """Upload a new contract as a PDF (order-form template) or JSON.
 
     The single shared pipeline runs once for the new contract; aggregates
     pick it up automatically because they sum the cached per-contract
     results — no reprocessing of existing contracts.
     """
     try:
-        payload = request.get_json(force=True)
+        if "file" in request.files:
+            f = request.files["file"]
+            name = (f.filename or "").lower()
+            if name.endswith(".pdf"):
+                payload = parse_contract_pdf(f)
+            else:
+                payload = json.load(f)
+        else:
+            payload = request.get_json(force=True)
+    except ContractValidationError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception:
-        return jsonify({"error": "Body must be valid JSON"}), 400
+        return jsonify({"error": "Upload a contract PDF (see the sample order form) or a JSON file"}), 400
     if isinstance(payload, list):
         if len(payload) != 1:
             return jsonify({"error": "Upload one contract at a time"}), 400
@@ -209,6 +222,64 @@ def close_batch():
     if len(month) != 7 or month[4] != "-":
         return jsonify({"error": "month must be YYYY-MM"}), 400
     return jsonify(month_end_close_batch(load_scope(), month))
+
+
+# Demo G/L mapping for the SAP-style export. In a real implementation this
+# would come from the company's chart of accounts / posting configuration.
+GL_ACCOUNTS = {
+    "Cash": ("1000000", "Cash and Cash Equivalents"),
+    "Deferred Revenue": ("2300000", "Deferred Revenue"),
+    "Revenue": ("4000000", "Subscription Revenue"),
+    "Revenue (usage)": ("4100000", "Usage Fee Revenue"),
+}
+COST_CENTER = "CC1000"
+PROFIT_CENTER = "PC1000"
+
+
+@app.route("/api/close-batch.csv")
+def close_batch_csv():
+    """Month-end close batch as an SAP-upload-style CSV.
+
+    One document per journal entry, two line items each (debit + credit),
+    with posting keys 40/50, G/L accounts, document header text, cost
+    center, and profit center — the shape a journal-entry upload template
+    (e.g. for SAP) expects.
+    """
+    month = request.args.get("month") or datetime.now(timezone.utc).strftime("%Y-%m")
+    if len(month) != 7 or month[4] != "-":
+        return jsonify({"error": "month must be YYYY-MM"}), 400
+    batch = month_end_close_batch(load_scope(), month)
+
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow([
+        "Document No", "Posting Date", "Document Header Text", "Line",
+        "Posting Key", "Debit/Credit", "G/L Account", "Account Name",
+        "Amount", "Currency", "Line Item Text", "Cost Center",
+        "Profit Center", "Contract ID",
+    ])
+
+    def account_for(name, entry):
+        if name == "Revenue" and entry["entry_type"] == "usage_billing":
+            return GL_ACCOUNTS["Revenue (usage)"]
+        return GL_ACCOUNTS[name]
+
+    for i, e in enumerate(batch["entries"], start=1):
+        doc_no = f"REV-{month}-{i:03d}"
+        header = f"RevRec close {month} — {e['contract_id']} {e['customer']}"
+        debit_gl, debit_name = account_for(e["debit_account"], e)
+        credit_gl, credit_name = account_for(e["credit_account"], e)
+        amount = f"{e['amount']:.2f}"
+        w.writerow([doc_no, e["date"], header, 1, "40", "Debit", debit_gl, debit_name,
+                    amount, "USD", e["memo"], COST_CENTER, PROFIT_CENTER, e["contract_id"]])
+        w.writerow([doc_no, e["date"], header, 2, "50", "Credit", credit_gl, credit_name,
+                    amount, "USD", e["memo"], COST_CENTER, PROFIT_CENTER, e["contract_id"]])
+
+    return Response(
+        buf.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=close_batch_{month}_sap.csv"},
+    )
 
 
 @app.route("/api/forecast")

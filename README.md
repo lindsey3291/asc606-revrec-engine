@@ -83,8 +83,10 @@ expected close rate) and is intentionally not blended into this number.
 
 ## Dynamic contract upload + incremental aggregation
 
-The dashboard's **Upload contract** button accepts a JSON file in the same
-structure as `data/seed_contracts.json`. The upload runs through the *same*
+The dashboard's **Upload Contract** button accepts a contract **PDF** that
+follows the sample order form (`static/sample_contract.pdf`, linked in the
+UI) — parsed deterministically with pypdf, no AI — or a JSON file in the
+seed-contract structure. Either path runs through the *same*
 `process_contract()` pipeline as the seeds — classification, allocation,
 scheduling, journal entries, AI rationale — then persists to SQLite.
 
@@ -125,7 +127,8 @@ scripts/generate_report.py  offline report bundle (JSON/CSV/markdown → output/
 |---|---|
 | `GET /api/contracts` | All contracts in scope (seeds + your uploads), fully processed |
 | `GET /api/contracts/<id>` | One contract's full detail |
-| `POST /api/contracts` | Upload a new contract (JSON body, seed structure) |
+| `POST /api/contracts` | Upload a new contract (PDF order form or JSON; multipart `file` or raw JSON body) |
+| `GET /api/close-batch.csv?month=YYYY-MM` | Close batch as an SAP-upload-style CSV (posting keys, G/L accounts, cost/profit centers) |
 | `GET /api/aggregates` | Deferred revenue series + recognized-by-method series |
 | `GET /api/close-batch?month=YYYY-MM` | Month-end close batch + control flags |
 | `GET /api/forecast?from=YYYY-MM&months=12` | Known revenue (RPO) forecast |
