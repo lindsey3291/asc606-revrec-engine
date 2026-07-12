@@ -77,6 +77,7 @@ def close_db(_exc):
 
 
 def init_db():
+    import hashlib
     conn = sqlite3.connect(DB_PATH)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS contracts (
@@ -88,20 +89,29 @@ def init_db():
             PRIMARY KEY (owner, contract_id)
         )
     """)
-    with open(os.path.join(BASE_DIR, "data", "seed_contracts.json")) as f:
-        seeds = json.load(f)
-    want_ids = {c["contract_id"] for c in seeds}
-    have_ids = {r[0] for r in conn.execute("SELECT contract_id FROM contracts WHERE owner='seed'").fetchall()}
+    conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
 
-    # Re-seed whenever the seed set on disk differs from what's stored (e.g.
-    # the seed contracts were replaced). Visitor uploads are never touched.
-    if want_ids != have_ids:
+    seed_path = os.path.join(BASE_DIR, "data", "seed_contracts.json")
+    seed_bytes = open(seed_path, "rb").read()
+    seed_hash = hashlib.sha1(seed_bytes).hexdigest()
+    seeds = json.loads(seed_bytes)
+
+    stored_hash_row = conn.execute("SELECT value FROM meta WHERE key='seed_hash'").fetchone()
+    stored_hash = stored_hash_row[0] if stored_hash_row else None
+    have_ids = {r[0] for r in conn.execute("SELECT contract_id FROM contracts WHERE owner='seed'").fetchall()}
+    want_ids = {c["contract_id"] for c in seeds}
+
+    # Re-seed when the seed file's CONTENT changes (hash) or its ID set differs
+    # — so replacing a seed's terms, not just adding/removing one, refreshes the
+    # stored seeds. Visitor uploads and overrides (owner != 'seed') are untouched.
+    if stored_hash != seed_hash or have_ids != want_ids:
         conn.execute("DELETE FROM contracts WHERE owner='seed'")
         now = datetime.now(timezone.utc).isoformat()
         for c in seeds:
             processed = add_rationales(process_contract(c))
             conn.execute("INSERT INTO contracts VALUES (?, ?, ?, ?, ?)",
                          ("seed", c["contract_id"], json.dumps(c), json.dumps(processed), now))
+        conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('seed_hash', ?)", (seed_hash,))
         conn.commit()
         print(f"Seeded {len(seeds)} contracts into {DB_PATH}")
 
