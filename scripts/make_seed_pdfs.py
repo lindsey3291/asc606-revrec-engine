@@ -137,15 +137,16 @@ make("07_quantum_platform.pdf", "Quantum Ledger Systems",
        "once the Term begins.")],
      "Quantum Ledger Systems", "Ashford Group")
 
-# 8 — Base fee + variable usage component (variable-consideration flag).
-make("08_nimbus_variable.pdf", "Nimbus Payments, Inc.",
-     "Order Form - Platform Access and Usage",
-     [("1. Term", "The Term is twelve (12) months, commencing March 1, 2026."),
-      ("2. Base Fee", "Customer shall pay a base platform access fee of thirty-six thousand dollars "
-       "($36,000) for access to the Nimbus Payments service over the Term."),
-      ("3. Usage Fee", "In addition to the base fee, Customer shall pay a variable, usage-based "
-       "transaction fee. This fee is estimated at approximately eight thousand dollars ($8,000) "
-       "annually but is subject to variation based on actual transaction volume during the Term.")],
+# 8 — Fully-priced two-obligation bundle (clean allocation, no flag).
+make("08_nimbus_bundle.pdf", "Nimbus Payments, Inc.",
+     "Order Form - License and Support",
+     [("1. Scope", "Vendor shall provide Customer (a) a perpetual license to the Nimbus Payments "
+       "software, and (b) twelve (12) months of support and platform maintenance."),
+      ("2. Term", "The support term is twelve (12) months, commencing March 1, 2026. The license is "
+       "delivered at commencement."),
+      ("3. Fees", "The perpetual software license is separately priced at twenty-four thousand dollars "
+       "($24,000). The twelve months of support and maintenance are separately priced at twelve "
+       "thousand dollars ($12,000), for a total contract value of thirty-six thousand dollars ($36,000).")],
      "Nimbus Payments, Inc.", "Riverstone Markets")
 
 # 9 — Three-component bundle, single total, no per-component pricing (hardest; flag).

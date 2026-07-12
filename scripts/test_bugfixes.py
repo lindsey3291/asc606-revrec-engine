@@ -155,21 +155,22 @@ sp = [add_rationales(process_contract(s)) for s in seeds]
 by_id = {p["contract_id"]: p for p in sp}
 
 check("exactly 10 seed contracts", len(sp) == 10, str(len(sp)))
-# Contracts 3, 8, 9 must NOT come out with a confident, silent classification.
+# Exactly two contracts require human review; both are unpriced bundles that
+# must NOT come out with a confident, silent classification.
 for cid in ("ORD-2603", "ORD-2609"):
     p = by_id[cid]
     check(f"{cid} fully flagged (no recognized amount)",
           p["recognized_amount"] == 0 and all(o["excluded"] for o in p["obligations"]),
           f"recognized={p['recognized_amount']}")
+# The fully-priced bundle allocates cleanly (no flag).
 c8 = by_id["ORD-2608"]
-check("ORD-2608 base recognized, variable flagged",
-      c8["recognized_amount"] == 36000 and any(o["excluded"] for o in c8["obligations"])
-      and c8["category"] == "variable")
+check("ORD-2608 fully-priced bundle allocates cleanly (no flag)",
+      c8["recognized_amount"] == 36000 and not any(o["excluded"] for o in c8["obligations"]))
 
 # Flagged obligations are excluded from every aggregate.
 ep = excluded_pending(sp)
-check("excluded-pending total = $198,000 across 3 contracts",
-      ep["total_excluded"] == 198000 and len(ep["items"]) == 3, str(ep["total_excluded"]))
+check("excluded-pending total = $190,000 across 2 contracts",
+      ep["total_excluded"] == 190000 and len(ep["items"]) == 2, str(ep["total_excluded"]))
 rpo = rpo_forecast(sp, "2026-06", 12)
 check("flagged contracts absent from RPO forecast",
       "ORD-2603" not in rpo["by_contract"] and "ORD-2609" not in rpo["by_contract"])

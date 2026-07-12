@@ -122,15 +122,21 @@ entry, or deferred-revenue row, so it's absent from the deferred revenue
 chart, the RPO forecast, and the month-end close batch. The dashboard shows a
 visible **"$X excluded from the totals pending review"** banner naming the
 affected contracts, so the incomplete totals read as intentional rather than a
-bug. A **Resolve pricing** control on an uploaded flagged contract lets a
-person supply the missing standalone price and timing; the obligation then
-flows into the aggregates normally. (The shared seed contracts stay flagged as
-permanent demonstrations.)
+bug.
 
-Among the 10 seeds, contracts **ORD-2603** (bundle, one aggregate fee),
-**ORD-2608** (base fee + variable usage), and **ORD-2609** (three-component
-bundle, single total) are correctly flagged — $198,000 held out of the totals
-pending review — rather than silently allocated.
+**Human-in-the-loop resolution.** A **"Provide the missing data (human
+review)"** control on any flagged contract lets a person supply the standalone
+price and delivery timing for each flagged obligation; it then flows into the
+deferred revenue, forecast, and close totals normally. This works on both
+uploaded contracts and the **shared seed contracts** — resolving a seed writes
+a **per-visitor override** (a private copy that supersedes the seed in that
+visitor's view only), so one person's fix never changes what another visitor
+sees. Deleting the override (a ↺ revert control) restores the flagged seed.
+
+Among the 10 seeds, two require human review — **ORD-2603** (bundle, one
+aggregate fee) and **ORD-2609** (three-component bundle, single total) — with
+$190,000 held out of the totals rather than silently allocated. Both are
+resolvable in-app by supplying the missing standalone prices.
 
 **Incremental by design:** each contract is processed exactly once and its full
 result is cached. Aggregate views (deferred revenue series, close batch, RPO
@@ -331,10 +337,11 @@ through stress testing (run `python3 scripts/test_bugfixes.py`):
   rejected with a specific "cannot be negative" message, distinct from the
   "field not found" error for a genuinely missing price.
 - **Prose seeds flag, exclude, and reallocate correctly.** ORD-2603 / ORD-2609
-  are fully flagged (no silent allocation); ORD-2608's base fee is recognized
-  while its variable component is flagged; $198,000 is held out of the totals;
-  the seed-#4 modification is applied; and every included contract's deferred
-  revenue drains to zero.
+  are fully flagged (no silent allocation), $190,000 held out of the totals;
+  ORD-2608 is a fully-priced bundle that allocates cleanly; the seed-#4
+  modification is applied; and every included contract's deferred revenue
+  drains to zero. Resolving a flagged seed via a per-visitor override brings it
+  into the totals.
 - **Backward compatibility holds.** A structured `Label: value` PDF is still
   detected and parsed exactly as before; a prose PDF is routed to the AI
   extractor. Both yield the identical internal schema.

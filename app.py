@@ -144,15 +144,26 @@ def set_visitor_cookie(resp):
     return resp
 
 
-def load_scope() -> list[dict]:
-    """All processed contracts visible to this visitor: seeds + own uploads."""
+def visible_rows() -> list[sqlite3.Row]:
+    """Rows visible to this visitor: the 10 seeds plus the visitor's own rows,
+    where a visitor row (an upload, or a RESOLVED OVERRIDE of a seed) with the
+    same contract_id supersedes the seed. This is how a visitor can resolve a
+    shared flagged seed without changing anyone else's view."""
     db = get_db()
     rows = db.execute(
-        "SELECT processed_json FROM contracts WHERE owner IN ('seed', ?) "
-        "ORDER BY owner != 'seed', contract_id",
+        "SELECT owner, contract_id, raw_json, processed_json FROM contracts "
+        "WHERE owner IN ('seed', ?) ORDER BY contract_id, owner = 'seed'",
         (visitor_id(),),
     ).fetchall()
-    return [json.loads(r["processed_json"]) for r in rows]
+    seen = {}
+    for r in rows:                       # visitor row sorts before the seed
+        seen.setdefault(r["contract_id"], r)
+    return list(seen.values())
+
+
+def load_scope() -> list[dict]:
+    """All processed contracts visible to this visitor (deduped)."""
+    return [json.loads(r["processed_json"]) for r in visible_rows()]
 
 
 # ---------------------------------------------------------------------------
@@ -166,18 +177,17 @@ def index():
 
 @app.route("/api/contracts")
 def list_contracts():
-    """List contracts in scope, tagging each with whether this visitor may
-    delete it (their own uploads — not the shared seed contracts)."""
-    db = get_db()
-    rows = db.execute(
-        "SELECT owner, processed_json FROM contracts WHERE owner IN ('seed', ?) "
-        "ORDER BY owner != 'seed', contract_id",
-        (visitor_id(),),
-    ).fetchall()
+    """List contracts in scope. `deletable` marks the visitor's own rows
+    (uploads or resolved overrides); `is_override` marks a resolved copy of a
+    seed (deleting it reverts to the shared flagged seed)."""
+    seed_ids = {r["contract_id"] for r in get_db().execute(
+        "SELECT contract_id FROM contracts WHERE owner='seed'").fetchall()}
     out = []
-    for r in rows:
+    for r in visible_rows():
         p = json.loads(r["processed_json"])
-        p["deletable"] = r["owner"] != "seed"
+        own = r["owner"] != "seed"
+        p["deletable"] = own
+        p["is_override"] = own and r["contract_id"] in seed_ids
         out.append(p)
     return jsonify({"contracts": out})
 
@@ -243,28 +253,26 @@ def upload_contract():
 
 @app.route("/api/contracts/<contract_id>", methods=["DELETE"])
 def delete_contract(contract_id):
-    """Delete one of THIS visitor's uploaded contracts, fully.
-
-    Only the visitor's own uploads are deletable — the 10 seed contracts are
-    shared and stay visible to everyone. Deletion removes the row from the
-    database; because every aggregate view (deferred revenue series, RPO
-    forecast, close batch, needs-review) is computed on demand from the
-    remaining rows, the deleted contract disappears from all of them on the
-    next fetch with no other bookkeeping required.
+    """Delete one of THIS visitor's own rows. An uploaded contract is removed
+    outright; a resolved override of a seed is removed so the view reverts to
+    the shared (flagged) seed. Pure seed contracts can't be deleted. Every
+    aggregate recomputes on the next fetch, so the change is reflected
+    everywhere with no other bookkeeping.
     """
     db = get_db()
-    seed = db.execute(
-        "SELECT 1 FROM contracts WHERE owner='seed' AND contract_id=?", (contract_id,)
-    ).fetchone()
-    if seed:
-        return jsonify({"error": "The sample contracts are shared and can't be deleted."}), 403
-    cur = db.execute(
-        "DELETE FROM contracts WHERE owner=? AND contract_id=?", (visitor_id(), contract_id)
-    )
+    cur = db.execute("DELETE FROM contracts WHERE owner=? AND contract_id=?",
+                     (visitor_id(), contract_id))
     db.commit()
     if cur.rowcount == 0:
+        is_seed = db.execute("SELECT 1 FROM contracts WHERE owner='seed' AND contract_id=?",
+                             (contract_id,)).fetchone()
+        if is_seed:
+            return jsonify({"error": "The sample contracts are shared and can't be deleted "
+                                     "(you can resolve a flagged one instead)."}), 403
         return jsonify({"error": f"Contract '{contract_id}' not found among your uploads."}), 404
-    return jsonify({"deleted": contract_id}), 200
+    reverted = db.execute("SELECT 1 FROM contracts WHERE owner='seed' AND contract_id=?",
+                          (contract_id,)).fetchone() is not None
+    return jsonify({"deleted": contract_id, "reverted": reverted}), 200
 
 
 @app.route("/api/contracts/<contract_id>/resolve", methods=["POST"])
@@ -275,14 +283,23 @@ def resolve_contract(contract_id):
     only — the shared sample contracts intentionally stay flagged as demos.
 
     Body: {"resolutions": {"<OB number>": {"standalone_price": N, "delivery_type": "one_time"|"over_time"}, ...}}
+
+    Works on the visitor's own uploads AND on the shared seed contracts:
+    resolving a seed writes a visitor-scoped OVERRIDE (a copy owned by the
+    visitor) so their fix flows into their totals without changing the shared
+    seed for other visitors. Deleting the override reverts to the seed.
     """
     db = get_db()
-    row = db.execute(
-        "SELECT raw_json FROM contracts WHERE owner=? AND contract_id=?",
-        (visitor_id(), contract_id)).fetchone()
+    # Resolve against what the visitor currently sees: their own row if one
+    # exists, otherwise the shared seed.
+    row = db.execute("SELECT raw_json FROM contracts WHERE owner=? AND contract_id=?",
+                     (visitor_id(), contract_id)).fetchone()
     if not row:
-        return jsonify({"error": "Only your own uploaded contracts can be resolved "
-                                 "(the sample contracts are shared demos)."}), 403
+        row = db.execute("SELECT raw_json FROM contracts WHERE owner='seed' AND contract_id=?",
+                         (contract_id,)).fetchone()
+    if not row:
+        return jsonify({"error": f"Contract '{contract_id}' not found."}), 404
+
     raw = json.loads(row["raw_json"])
     resolutions = (request.get_json(force=True, silent=True) or {}).get("resolutions") or {}
     for i, d in enumerate(raw["deliverables"]):
@@ -304,8 +321,12 @@ def resolve_contract(contract_id):
         processed = add_rationales(process_contract(raw))
     except ContractValidationError as e:
         return jsonify({"error": str(e)}), 400
-    db.execute("UPDATE contracts SET raw_json=?, processed_json=? WHERE owner=? AND contract_id=?",
-               (json.dumps(raw), json.dumps(processed), visitor_id(), contract_id))
+    # Write as a visitor-owned row (upsert) — creates the override for a seed,
+    # or updates the visitor's own upload.
+    db.execute("INSERT OR REPLACE INTO contracts (owner, contract_id, raw_json, processed_json, created_at) "
+               "VALUES (?, ?, ?, ?, ?)",
+               (visitor_id(), contract_id, json.dumps(raw), json.dumps(processed),
+                datetime.now(timezone.utc).isoformat()))
     db.commit()
     return jsonify(processed), 200
 

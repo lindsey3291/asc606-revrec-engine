@@ -297,7 +297,7 @@ function renderTable() {
       <td class="num">${fmt(p.total_price)}</td>
       <td class="num">${p.obligations.length}</td>
       <td>${methodsCell(p)}</td>
-      <td>${p.deletable ? `<button class="del" data-del="${p.contract_id}" title="Delete this contract">🗑</button>` : ""}</td>
+      <td>${p.deletable ? `<button class="del" data-del="${p.contract_id}" title="${p.is_override ? "Revert to the flagged sample" : "Delete this contract"}">${p.is_override ? "↺" : "🗑"}</button>` : ""}</td>
     </tr>`).join("");
   tbody.querySelectorAll("tr").forEach(tr => tr.addEventListener("click", e => {
     if (e.target.classList.contains("del")) return;  // delete handled separately
@@ -312,16 +312,23 @@ function renderTable() {
 }
 
 async function deleteContract(id) {
-  if (!confirm(`Are you sure you want to delete contract ${id}? This cannot be undone.`)) return;
+  const c = contracts.find(x => x.contract_id === id);
+  const isOverride = c && c.is_override;
+  const prompt = isOverride
+    ? `Revert ${id} to the flagged sample contract? Your resolved values will be discarded.`
+    : `Are you sure you want to delete contract ${id}? This cannot be undone.`;
+  if (!confirm(prompt)) return;
   const status = document.getElementById("uploadStatus");
-  status.className = ""; status.textContent = `Deleting ${id}…`;
+  status.className = ""; status.textContent = `${isOverride ? "Reverting" : "Deleting"} ${id}…`;
   try {
     const r = await fetch(`/api/contracts/${encodeURIComponent(id)}`, { method: "DELETE" });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || r.statusText);
     if (selectedId === id) { selectedId = null; document.getElementById("detail").classList.remove("open"); }
     status.className = "ok";
-    status.textContent = `✓ ${id} deleted — charts, forecast, close batch, and review queue updated.`;
+    status.textContent = data.reverted
+      ? `✓ ${id} reverted to the flagged sample — totals updated.`
+      : `✓ ${id} deleted — charts, forecast, close batch, and review queue updated.`;
     await loadAll();       // re-pulls contracts + aggregates + RPO
     await runClose();      // re-pulls the close batch for the selected month
   } catch (err) {
@@ -365,13 +372,14 @@ function renderDetail(p) {
   if (p.modification_note) html += `<div class="note">⚠ ${p.modification_note}</div>`;
   if (p.variable_note) html += `<div class="note">≈ ${p.variable_note}</div>`;
 
-  // Resolve form — only for the visitor's own uploaded contracts that have
-  // flagged obligations. Seeds stay flagged as permanent demos.
+  // Resolve form — shown for ANY contract with flagged obligations, seeds
+  // included. Resolving a shared seed creates a private override (your fix,
+  // your view); other visitors still see it flagged.
   const flagged = p.obligations.filter(o => o.excluded);
-  if (p.deletable && flagged.length) {
-    html += `<div class="resolvebox"><b>Resolve pricing</b> — supply the missing standalone price and
-      delivery timing for each flagged obligation, and it will flow into the deferred revenue, forecast,
-      and close totals.
+  if (flagged.length) {
+    html += `<div class="resolvebox"><b>Provide the missing data (human review)</b> — supply the standalone
+      price and delivery timing for each flagged obligation, and it will flow into the deferred revenue,
+      forecast, and close totals.${p.deletable ? "" : " Resolving this sample contract saves a private copy for your session only."}
       ${flagged.map(o => {
         const n = o.obligation_id.split("-OB")[1];
         return `<div class="row" data-ob="${n}">

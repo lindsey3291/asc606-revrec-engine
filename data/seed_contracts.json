@@ -145,21 +145,16 @@
     "total_price": 36000,
     "deliverables": [
       {
-        "type": "subscription",
-        "description": "Base platform access fee for the Nimbus Payments service over a twelve (12) month term",
-        "standalone_price_estimate": 36000,
-        "delivery_type": "over_time"
+        "type": "license",
+        "description": "Perpetual license to the Nimbus Payments software, separately priced at $24,000",
+        "standalone_price_estimate": 24000,
+        "delivery_type": "one_time"
       },
       {
-        "type": "usage_fee",
-        "description": "Variable usage-based transaction fee, estimated at $8,000 annually, subject to variation based on transaction volume",
-        "standalone_price_estimate": null,
-        "delivery_type": "over_time",
-        "review": {
-          "kind": "variable_consideration",
-          "reason": "Variable, usage-based consideration subject to variation. Per the reference guide, variable-consideration constraint estimation is out of scope for this tool — the amount is excluded from recognized totals and flagged for human review rather than confidently classified.",
-          "excluded_amount": 8000
-        }
+        "type": "support",
+        "description": "Twelve (12) months of support and platform maintenance, separately priced at $12,000",
+        "standalone_price_estimate": 12000,
+        "delivery_type": "over_time"
       }
     ]
   },
