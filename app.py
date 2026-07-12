@@ -56,6 +56,9 @@ DB_PATH = DATABASE_URL[len("sqlite:///"):]
 app = Flask(__name__, static_folder="static")
 
 VISITOR_COOKIE = "revrec_visitor"
+# Bump when engine/explain logic changes the seeds' processed output, to force
+# a one-time reprocess of the stored seeds on the next boot.
+SEED_VERSION = "2"
 
 
 # ---------------------------------------------------------------------------
@@ -93,25 +96,27 @@ def init_db():
 
     seed_path = os.path.join(BASE_DIR, "data", "seed_contracts.json")
     seed_bytes = open(seed_path, "rb").read()
-    seed_hash = hashlib.sha1(seed_bytes).hexdigest()
     seeds = json.loads(seed_bytes)
+    # Marker combines the seed file's content hash with a version bumped when
+    # the PROCESSING logic changes (so an engine/explain change reprocesses the
+    # stored seeds even though the data file is unchanged).
+    seed_marker = hashlib.sha1(seed_bytes).hexdigest() + ":" + SEED_VERSION
 
-    stored_hash_row = conn.execute("SELECT value FROM meta WHERE key='seed_hash'").fetchone()
-    stored_hash = stored_hash_row[0] if stored_hash_row else None
+    stored_row = conn.execute("SELECT value FROM meta WHERE key='seed_hash'").fetchone()
+    stored_marker = stored_row[0] if stored_row else None
     have_ids = {r[0] for r in conn.execute("SELECT contract_id FROM contracts WHERE owner='seed'").fetchall()}
     want_ids = {c["contract_id"] for c in seeds}
 
-    # Re-seed when the seed file's CONTENT changes (hash) or its ID set differs
-    # — so replacing a seed's terms, not just adding/removing one, refreshes the
-    # stored seeds. Visitor uploads and overrides (owner != 'seed') are untouched.
-    if stored_hash != seed_hash or have_ids != want_ids:
+    # Re-seed when the seed content, its ID set, or the processing version
+    # changes. Visitor uploads and overrides (owner != 'seed') are untouched.
+    if stored_marker != seed_marker or have_ids != want_ids:
         conn.execute("DELETE FROM contracts WHERE owner='seed'")
         now = datetime.now(timezone.utc).isoformat()
         for c in seeds:
             processed = add_rationales(process_contract(c))
             conn.execute("INSERT INTO contracts VALUES (?, ?, ?, ?, ?)",
                          ("seed", c["contract_id"], json.dumps(c), json.dumps(processed), now))
-        conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('seed_hash', ?)", (seed_hash,))
+        conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('seed_hash', ?)", (seed_marker,))
         conn.commit()
         print(f"Seeded {len(seeds)} contracts into {DB_PATH}")
 

@@ -308,16 +308,19 @@ def add_rationales(processed: dict) -> dict:
 
         if ai and ob_id in ai:
             text, source = ai[ob_id]["rationale"], "claude (RAG-grounded)"
-            # The AI can only lower confidence relative to the deterministic
-            # heuristic, never raise it above the rule-based floor checks.
+            # The AI may nuance the DISPLAYED confidence down one notch, but a
+            # priced/included obligation is never dropped to "low" and never
+            # added to the review queue on an AI nuance alone. The Needs Review
+            # queue is reserved for obligations that genuinely can't be
+            # processed (excluded/unpriced) or hit a deterministic red flag
+            # (out-of-scope, tied SSP, contradictory or too-sparse text) — so a
+            # confidently-priced item doesn't clutter it just because the prose
+            # reads a little generic.
             order = {"high": 2, "medium": 1, "low": 0}
             if order[ai[ob_id]["confidence"]] < order[assessment["confidence"]]:
-                assessment["confidence"] = ai[ob_id]["confidence"]
-                assessment["confidence_reason"] += " (Downgraded by AI review of the description.)"
-                if assessment["confidence"] == "low":
-                    assessment["reviews"].append(
-                        "AI review judged the description ambiguous against the criteria.")
-                    assessment["needs_review"] = True
+                assessment["confidence"] = "medium" if order[ai[ob_id]["confidence"]] < 1 \
+                    else ai[ob_id]["confidence"]
+                assessment["confidence_reason"] += " (Adjusted down by AI review of the description.)"
         else:
             text, source = _template_rationale(ob, processed), "template (reference-doc grounded)"
 
