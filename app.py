@@ -253,10 +253,9 @@ def close_batch_csv():
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow([
-        "Document No", "Posting Date", "Document Header Text", "Line",
-        "Posting Key", "Debit/Credit", "G/L Account", "Account Name",
-        "Amount", "Currency", "Line Item Text", "Cost Center",
-        "Profit Center", "Contract ID",
+        "Posting Date", "Document Header Text", "Posting Key", "Debit/Credit",
+        "G/L Account", "Account Name", "Amount", "Currency", "Line Item Text",
+        "Cost Center", "Profit Center", "Contract ID",
     ])
 
     def account_for(name, entry):
@@ -264,15 +263,16 @@ def close_batch_csv():
             return GL_ACCOUNTS["Revenue (usage)"]
         return GL_ACCOUNTS[name]
 
-    for i, e in enumerate(batch["entries"], start=1):
-        doc_no = f"REV-{month}-{i:03d}"
-        header = f"RevRec close {month} — {e['contract_id']} {e['customer']}"
+    # The batch is one balanced posting: every debit row is immediately
+    # followed by its matching credit row, and total debits == total credits.
+    header = f"RevRec close {month}"
+    for e in batch["entries"]:
         debit_gl, debit_name = account_for(e["debit_account"], e)
         credit_gl, credit_name = account_for(e["credit_account"], e)
         amount = f"{e['amount']:.2f}"
-        w.writerow([doc_no, e["date"], header, 1, "40", "Debit", debit_gl, debit_name,
+        w.writerow([e["date"], header, "40", "Debit", debit_gl, debit_name,
                     amount, "USD", e["memo"], COST_CENTER, PROFIT_CENTER, e["contract_id"]])
-        w.writerow([doc_no, e["date"], header, 2, "50", "Credit", credit_gl, credit_name,
+        w.writerow([e["date"], header, "50", "Credit", credit_gl, credit_name,
                     amount, "USD", e["memo"], COST_CENTER, PROFIT_CENTER, e["contract_id"]])
 
     return Response(
