@@ -84,6 +84,7 @@
   .resolvebox .row { display: flex; gap: 8px; align-items: center; margin: 6px 0; flex-wrap: wrap; }
   .resolvebox input, .resolvebox select { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; font-size: 13px; }
   .resolvebox .rtiming, .resolvebox .rdelivery { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+  .resolvebox input.rprice.missing { border-color: #d33; background: #fff0f0; }
   .resolvebox button { background: var(--ink); color: var(--lime); border: none; border-radius: 6px; padding: 6px 14px; font-weight: 600; cursor: pointer; }
 </style>
 </head>
@@ -386,7 +387,7 @@ function renderDetail(p) {
         const n = o.obligation_id.split("-OB")[1];
         return `<div class="row" data-ob="${n}">
           <span style="min-width:180px">${o.obligation_id} — ${o.type}</span>
-          <input type="number" min="0" step="0.01" placeholder="Standalone price" class="rprice">
+          <input type="number" min="0" step="0.01" placeholder="Standalone price" class="rprice" oninput="this.classList.remove('missing')">
           <select class="rtype" onchange="var r=this.closest('.row'),ot=this.value==='over_time';r.querySelector('.rtiming').style.display=ot?'':'none';r.querySelector('.rdelivery').style.display=ot?'none':''"><option value="over_time">over_time</option><option value="one_time">one_time</option></select>
           <span class="rtiming">starts <input type="month" class="rsvcstart" value="${p.start_date.slice(0,7)}"> for <input type="number" min="1" step="1" class="rsvcmonths" value="12" style="width:60px"> mo</span>
           <span class="rdelivery" style="display:none">delivered <input type="month" class="rdelivmonth" value="${p.start_date.slice(0,7)}"></span>
@@ -438,26 +439,35 @@ async function resolveContract(id) {
       resolutions[row.dataset.ob] = res;
     }
   });
+  rows.forEach(r => r.querySelector(".rprice").classList.remove("missing"));
   if (!Object.keys(resolutions).length) { alert("Enter at least one standalone price."); return; }
 
-  // Fat-finger guard: only when the contract is being FULLY resolved (every
-  // flagged obligation now priced), so Step 4 will allocate the contract price
-  // across them by relative SSP. A material gap between the standalone prices
-  // and the contract price is a bundle discount/premium — legitimate, but worth
-  // a confirm so a typo can't slip through as a silent scaling.
+  // Two resolve-time verifications — surface anything off and let the user
+  // confirm intent, never silently accepting an incomplete or over-total fix.
   const c = contracts.find(x => x.contract_id === id);
   const total = c ? c.total_price : 0;
-  if (filled === rows.length && total > 0) {
-    const diff = enteredSum - total, pct = Math.abs(diff) / total;
-    if (pct > 0.10) {
-      const kind = diff > 0 ? "discount" : "premium";
-      const ok = confirm(
-        `Standalone prices sum to $${enteredSum.toLocaleString()} vs. the $${total.toLocaleString()} ` +
-        `contract price — a ${(pct * 100).toFixed(0)}% bundle ${kind} ($${Math.abs(diff).toLocaleString()}), ` +
-        `which will be allocated proportionally across the obligations (ASC 606 Step 4).\n\n` +
-        `Confirm this is intentional (not a typo)?`);
-      if (!ok) { document.getElementById("uploadStatus").textContent = ""; return; }
-    }
+  const warnings = [];
+
+  // (1) Partial fill: mark the empty rows red and warn that they stay flagged.
+  if (filled < rows.length) {
+    rows.forEach(r => { if (!r.querySelector(".rprice").value) r.querySelector(".rprice").classList.add("missing"); });
+    warnings.push(`Only ${filled} of ${rows.length} obligations are priced — the remaining ${rows.length - filled} `
+      + `will stay flagged and excluded from the totals (highlighted in red).`);
+  }
+
+  // (2) Prices exceed the contract price: flag and have the user verify intent.
+  if (total > 0 && enteredSum > total) {
+    const over = enteredSum - total, pct = over / total * 100;
+    warnings.push(filled === rows.length
+      ? `Standalone prices sum to $${enteredSum.toLocaleString()} vs. the $${total.toLocaleString()} contract price — `
+        + `a ${pct.toFixed(0)}% bundle discount ($${over.toLocaleString()}), allocated proportionally (ASC 606 Step 4).`
+      : `The prices entered ($${enteredSum.toLocaleString()}) already exceed the whole contract `
+        + `($${total.toLocaleString()}) by $${over.toLocaleString()}, with obligations still unpriced — this looks like a typo.`);
+  }
+
+  if (warnings.length) {
+    const ok = confirm("⚠ Please verify before resolving:\n\n• " + warnings.join("\n\n• ") + "\n\nContinue anyway?");
+    if (!ok) { document.getElementById("uploadStatus").textContent = ""; return; }
   }
   const status = document.getElementById("uploadStatus");
   status.className = ""; status.textContent = `Resolving ${id}…`;
