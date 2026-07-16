@@ -28,9 +28,11 @@ from flask import Flask, Response, g, jsonify, request, send_from_directory
 
 from engine.core import (
     ContractValidationError,
+    add_months,
     aggregate_deferred_revenue,
     aggregate_recognized_by_method,
     excluded_pending,
+    month_end,
     month_end_close_batch,
     process_contract,
     rpo_forecast,
@@ -331,6 +333,27 @@ def resolve_contract(contract_id):
                                          "price and a delivery type (one_time or over_time)."}), 400
             d["standalone_price_estimate"] = price
             d["delivery_type"] = dtype
+            # Any prior service window is stale once the obligation is re-resolved.
+            d.pop("service_start", None)
+            d.pop("service_end", None)
+            if dtype == "over_time":
+                # Optional service window: the month it starts + how many months
+                # it runs. Lets a multi-year support tail spread beyond a
+                # single-date contract's base term.
+                svc_start = r.get("service_start")           # "YYYY-MM"
+                try:
+                    svc_months = int(r.get("service_months"))
+                except (TypeError, ValueError):
+                    svc_months = 0
+                if svc_start:
+                    if len(svc_start) != 7 or svc_start[4] != "-":
+                        return jsonify({"error": f"Obligation {key}: service start month "
+                                                 "must be YYYY-MM."}), 400
+                    if svc_months < 1:
+                        return jsonify({"error": f"Obligation {key}: service length must be "
+                                                 "at least 1 month."}), 400
+                    d["service_start"] = f"{svc_start}-01"
+                    d["service_end"] = month_end(add_months(svc_start, svc_months - 1))
             d.pop("review", None)
     try:
         processed = add_rationales(process_contract(raw))

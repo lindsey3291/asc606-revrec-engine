@@ -83,6 +83,7 @@
   .resolvebox { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 8px 0; }
   .resolvebox .row { display: flex; gap: 8px; align-items: center; margin: 6px 0; flex-wrap: wrap; }
   .resolvebox input, .resolvebox select { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; font-size: 13px; }
+  .resolvebox .rtiming { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
   .resolvebox button { background: var(--ink); color: var(--lime); border: none; border-radius: 6px; padding: 6px 14px; font-weight: 600; cursor: pointer; }
 </style>
 </head>
@@ -385,7 +386,8 @@ function renderDetail(p) {
         return `<div class="row" data-ob="${n}">
           <span style="min-width:180px">${o.obligation_id} — ${o.type}</span>
           <input type="number" min="0" step="0.01" placeholder="Standalone price" class="rprice">
-          <select class="rtype"><option value="over_time">over_time</option><option value="one_time">one_time</option></select>
+          <select class="rtype" onchange="this.closest('.row').querySelector('.rtiming').style.display=this.value==='over_time'?'':'none'"><option value="over_time">over_time</option><option value="one_time">one_time</option></select>
+          <span class="rtiming">starts <input type="month" class="rsvcstart" value="${p.start_date.slice(0,7)}"> for <input type="number" min="1" step="1" class="rsvcmonths" value="12" style="width:60px"> mo</span>
         </div>`;
       }).join("")}
       <div class="row"><button id="resolveBtn" data-id="${p.contract_id}">Resolve & include in totals</button></div>
@@ -417,7 +419,16 @@ async function resolveContract(id) {
   document.querySelectorAll("#detailBody .resolvebox .row[data-ob]").forEach(row => {
     const price = row.querySelector(".rprice").value;
     const dtype = row.querySelector(".rtype").value;
-    if (price) resolutions[row.dataset.ob] = { standalone_price: parseFloat(price), delivery_type: dtype };
+    if (price) {
+      const res = { standalone_price: parseFloat(price), delivery_type: dtype };
+      if (dtype === "over_time") {
+        const ss = row.querySelector(".rsvcstart").value;
+        const sm = row.querySelector(".rsvcmonths").value;
+        if (ss) res.service_start = ss;
+        if (sm) res.service_months = parseInt(sm, 10);
+      }
+      resolutions[row.dataset.ob] = res;
+    }
   });
   if (!Object.keys(resolutions).length) { alert("Enter at least one standalone price."); return; }
   const status = document.getElementById("uploadStatus");

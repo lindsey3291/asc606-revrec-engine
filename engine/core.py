@@ -121,6 +121,15 @@ def validate_contract(contract: dict) -> None:
                 raise ContractValidationError(f"Deliverable {i + 1} standalone_price_estimate cannot be negative")
         elif ssp is None or float(ssp) <= 0:
             raise ContractValidationError(f"Deliverable {i + 1} standalone_price_estimate must be positive")
+        # Optional per-obligation service window (over_time obligations only).
+        # May extend past the contract end_date — that's the point (e.g. a
+        # 24-month support tail). Only the ordering is constrained.
+        if d.get("service_start") is not None or d.get("service_end") is not None:
+            ss = _parse_date(d["service_start"]) if d.get("service_start") else start
+            se = _parse_date(d["service_end"]) if d.get("service_end") else end
+            if se < ss:
+                raise ContractValidationError(
+                    f"Deliverable {i + 1} service_end is before service_start")
     mod = contract.get("modification")
     if mod is not None:
         for f in ("date", "description", "added_price", "added_deliverable"):
@@ -269,7 +278,25 @@ def process_contract(contract: dict) -> dict:
 
     start_m = month_key(contract["start_date"])
     end_m = month_key(contract["end_date"])
-    months = month_span(start_m, end_m)
+
+    def _ob_window(d):
+        """(start_month, end_month) an over_time obligation recognizes across —
+        its own service window when supplied, else the contract term. Lets a
+        multi-year support tail spread beyond the base term (e.g. 24-month
+        maintenance on a contract signed on a single date)."""
+        ss = month_key(d["service_start"]) if d.get("service_start") else start_m
+        se = month_key(d["service_end"]) if d.get("service_end") else end_m
+        return ss, se
+
+    # The recognition horizon must cover the contract term AND any over_time
+    # obligation whose service window extends past end_date.
+    span_end = end_m
+    for d in delivs:
+        if not d.get("review") and d["delivery_type"] == "over_time":
+            _, se = _ob_window(d)
+            if _month_index(se) > _month_index(span_end):
+                span_end = se
+    months = month_span(start_m, span_end)
 
     # Step 2: identify performance obligations. Step 4: allocate the price.
     # An obligation carrying a "review" marker (missing/ambiguous standalone
@@ -315,7 +342,8 @@ def process_contract(contract: dict) -> dict:
             schedule.append({"month": start_m, "obligation_id": ob_id,
                              "amount_cents": alloc, "method": "point_in_time"})
         else:
-            for m, amt in zip(months, _spread(alloc, len(months))):
+            ob_months = month_span(*_ob_window(d))
+            for m, amt in zip(ob_months, _spread(alloc, len(ob_months))):
                 schedule.append({"month": m, "obligation_id": ob_id,
                                  "amount_cents": amt, "method": "over_time"})
 
