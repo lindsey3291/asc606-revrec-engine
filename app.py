@@ -60,7 +60,7 @@ app = Flask(__name__, static_folder="static")
 VISITOR_COOKIE = "revrec_visitor"
 # Bump when engine/explain logic changes the seeds' processed output, to force
 # a one-time reprocess of the stored seeds on the next boot.
-SEED_VERSION = "2"
+SEED_VERSION = "3"
 
 
 # ---------------------------------------------------------------------------

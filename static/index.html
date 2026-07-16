@@ -371,6 +371,7 @@ function renderDetail(p) {
       <div class="src">Rationale source: ${r.source}</div></div>`;
   }).join("");
   if (p.modification_note) html += `<div class="note">⚠ ${p.modification_note}</div>`;
+  if (p.allocation_note) html += `<div class="note">⚖ ${p.allocation_note}</div>`;
   if (p.variable_note) html += `<div class="note">≈ ${p.variable_note}</div>`;
 
   // Resolve form — shown for ANY contract with flagged obligations, seeds
@@ -417,10 +418,13 @@ function renderDetail(p) {
 
 async function resolveContract(id) {
   const resolutions = {};
-  document.querySelectorAll("#detailBody .resolvebox .row[data-ob]").forEach(row => {
+  const rows = [...document.querySelectorAll("#detailBody .resolvebox .row[data-ob]")];
+  let enteredSum = 0, filled = 0;
+  rows.forEach(row => {
     const price = row.querySelector(".rprice").value;
     const dtype = row.querySelector(".rtype").value;
     if (price) {
+      filled++; enteredSum += parseFloat(price);
       const res = { standalone_price: parseFloat(price), delivery_type: dtype };
       if (dtype === "over_time") {
         const ss = row.querySelector(".rsvcstart").value;
@@ -435,6 +439,26 @@ async function resolveContract(id) {
     }
   });
   if (!Object.keys(resolutions).length) { alert("Enter at least one standalone price."); return; }
+
+  // Fat-finger guard: only when the contract is being FULLY resolved (every
+  // flagged obligation now priced), so Step 4 will allocate the contract price
+  // across them by relative SSP. A material gap between the standalone prices
+  // and the contract price is a bundle discount/premium — legitimate, but worth
+  // a confirm so a typo can't slip through as a silent scaling.
+  const c = contracts.find(x => x.contract_id === id);
+  const total = c ? c.total_price : 0;
+  if (filled === rows.length && total > 0) {
+    const diff = enteredSum - total, pct = Math.abs(diff) / total;
+    if (pct > 0.10) {
+      const kind = diff > 0 ? "discount" : "premium";
+      const ok = confirm(
+        `Standalone prices sum to $${enteredSum.toLocaleString()} vs. the $${total.toLocaleString()} ` +
+        `contract price — a ${(pct * 100).toFixed(0)}% bundle ${kind} ($${Math.abs(diff).toLocaleString()}), ` +
+        `which will be allocated proportionally across the obligations (ASC 606 Step 4).\n\n` +
+        `Confirm this is intentional (not a typo)?`);
+      if (!ok) { document.getElementById("uploadStatus").textContent = ""; return; }
+    }
+  }
   const status = document.getElementById("uploadStatus");
   status.className = ""; status.textContent = `Resolving ${id}…`;
   try {

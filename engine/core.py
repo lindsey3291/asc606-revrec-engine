@@ -326,6 +326,7 @@ def process_contract(contract: dict) -> dict:
     included_idx = [i for i, d in enumerate(delivs) if not d.get("review")]
     flagged_idx = [i for i, d in enumerate(delivs) if d.get("review")]
 
+    clean_ssp_sum_cents = None   # set on the clean path, for the allocation note
     if flagged_idx:
         # Mixed/flagged contract: do NOT divide the stated total across
         # obligations (part of that total belongs to the excluded items). Each
@@ -335,6 +336,7 @@ def process_contract(contract: dict) -> dict:
         # Clean contract: allocate the transaction price across all obligations
         # in proportion to standalone selling prices (handles bundle discounts).
         ssp_all = [_cents(d["standalone_price_estimate"]) for d in delivs]
+        clean_ssp_sum_cents = sum(ssp_all)
         alloc_list = _allocate(total_cents, ssp_all)
         alloc_by_idx = {i: alloc_list[i] for i in range(len(delivs))}
 
@@ -371,12 +373,12 @@ def process_contract(contract: dict) -> dict:
 
     # Recognizable (allocable) consideration — only the included obligations.
     recognized_total_cents = sum(alloc_by_idx.get(i, 0) for i in included_idx)
-    # Amount deliberately excluded from every total pending human review.
-    if not included_idx:
-        excluded_cents = total_cents          # whole contract un-allocatable
-    else:
-        excluded_cents = sum((ob.get("review_excluded_cents") or 0)
-                             for ob in obligations if ob.get("excluded"))
+    # Amount deliberately excluded from every total pending human review. The
+    # invariant recognized + excluded == total must always hold, including when
+    # a multi-obligation bundle is only PARTIALLY resolved (some obligations
+    # priced, others still flagged) — otherwise the still-flagged portion would
+    # silently vanish from both the recognized totals and the excluded banner.
+    excluded_cents = max(0, total_cents - recognized_total_cents)
 
     modification_note = None
     if contract.get("modification"):
@@ -465,13 +467,36 @@ def process_contract(contract: dict) -> dict:
             "ending_balance": _dollars(balance),
         })
 
+    # A prospective modification adds consideration that flows through the
+    # schedule, journal, and deferred-revenue tables. Reflect it in the
+    # displayed total and recognized amounts too, so the contract header ties
+    # to what actually recognizes ($90k here, not the pre-mod $72k) instead of
+    # showing a total smaller than the revenue it books.
+    mod_added_cents = _cents(contract["modification"]["added_price"]) if contract.get("modification") else 0
+
+    # Bundle discount/premium transparency: when a multi-obligation contract's
+    # standalone selling prices don't sum to the contract price, Step 4 spreads
+    # the difference proportionally. Surface it so the allocation is never a
+    # silent scaling (and a fat-finger price is visible rather than absorbed).
+    allocation_note = None
+    if clean_ssp_sum_cents is not None and len(delivs) >= 2 and clean_ssp_sum_cents != total_cents:
+        diff = clean_ssp_sum_cents - total_cents
+        pct = abs(diff) / total_cents * 100
+        kind = "discount" if diff > 0 else "premium"
+        allocation_note = (
+            f"Standalone selling prices sum to ${_dollars(clean_ssp_sum_cents):,.2f} vs. the "
+            f"${_dollars(total_cents):,.2f} contract price — a ${_dollars(abs(diff)):,.2f} "
+            f"({pct:.0f}%) bundle {kind}, allocated proportionally across all obligations "
+            f"(ASC 606 Step 4). No obligation recognizes more than its allocated share."
+        )
+
     return {
         "contract_id": cid,
         "customer": contract["customer"],
         "start_date": contract["start_date"],
         "end_date": contract["end_date"],
-        "total_price": _dollars(total_cents),
-        "recognized_amount": _dollars(recognized_total_cents),
+        "total_price": _dollars(total_cents + mod_added_cents),
+        "recognized_amount": _dollars(recognized_total_cents + mod_added_cents),
         "excluded_amount": _dollars(excluded_cents),
         "category": _classify_category(contract),
         "term_months": len(months),
@@ -501,6 +526,7 @@ def process_contract(contract: dict) -> dict:
         } for j in journal],
         "deferred_revenue": dr_table,
         "modification_note": modification_note,
+        "allocation_note": allocation_note,
         "variable_note": variable_note,
         "rationales": {},  # filled by engine.explain
     }
