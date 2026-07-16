@@ -333,9 +333,10 @@ def resolve_contract(contract_id):
                                          "price and a delivery type (one_time or over_time)."}), 400
             d["standalone_price_estimate"] = price
             d["delivery_type"] = dtype
-            # Any prior service window is stale once the obligation is re-resolved.
+            # Any prior timing is stale once the obligation is re-resolved.
             d.pop("service_start", None)
             d.pop("service_end", None)
+            d.pop("delivery_date", None)
             if dtype == "over_time":
                 # Optional service window: the month it starts + how many months
                 # it runs. Lets a multi-year support tail spread beyond a
@@ -354,6 +355,16 @@ def resolve_contract(contract_id):
                                                  "at least 1 month."}), 400
                     d["service_start"] = f"{svc_start}-01"
                     d["service_end"] = month_end(add_months(svc_start, svc_months - 1))
+            else:  # one_time
+                # Optional delivery month: control transfers when the obligation
+                # completes (e.g. a data migration recognized on completion),
+                # which can be after the signing date.
+                deliver_m = r.get("delivery_month")          # "YYYY-MM"
+                if deliver_m:
+                    if len(deliver_m) != 7 or deliver_m[4] != "-":
+                        return jsonify({"error": f"Obligation {key}: delivery month "
+                                                 "must be YYYY-MM."}), 400
+                    d["delivery_date"] = month_end(deliver_m)
             d.pop("review", None)
     try:
         processed = add_rationales(process_contract(raw))

@@ -130,6 +130,14 @@ def validate_contract(contract: dict) -> None:
             if se < ss:
                 raise ContractValidationError(
                     f"Deliverable {i + 1} service_end is before service_start")
+        # Optional point-in-time delivery date (control transfers on completion,
+        # e.g. a data migration recognized when it finishes — which can be after
+        # the signing date). Must not precede the contract start.
+        if d.get("delivery_date") is not None:
+            dd = _parse_date(d["delivery_date"])
+            if dd < start:
+                raise ContractValidationError(
+                    f"Deliverable {i + 1} delivery_date is before the contract start_date")
     mod = contract.get("modification")
     if mod is not None:
         for f in ("date", "description", "added_price", "added_deliverable"):
@@ -288,14 +296,25 @@ def process_contract(contract: dict) -> dict:
         se = month_key(d["service_end"]) if d.get("service_end") else end_m
         return ss, se
 
-    # The recognition horizon must cover the contract term AND any over_time
-    # obligation whose service window extends past end_date.
+    def _deliver_date(d):
+        """Exact date a point_in_time obligation transfers control — its own
+        delivery_date when supplied (e.g. a data migration recognized on
+        completion), else the contract start date."""
+        return d["delivery_date"] if d.get("delivery_date") else contract["start_date"]
+
+    # The recognition horizon must cover the contract term, any over_time
+    # obligation whose service window extends past end_date, and any
+    # point_in_time obligation delivered after end_date.
     span_end = end_m
     for d in delivs:
-        if not d.get("review") and d["delivery_type"] == "over_time":
+        if d.get("review"):
+            continue
+        if d["delivery_type"] == "over_time":
             _, se = _ob_window(d)
-            if _month_index(se) > _month_index(span_end):
-                span_end = se
+        else:
+            se = month_key(_deliver_date(d))
+        if _month_index(se) > _month_index(span_end):
+            span_end = se
     months = month_span(start_m, span_end)
 
     # Step 2: identify performance obligations. Step 4: allocate the price.
@@ -320,6 +339,7 @@ def process_contract(contract: dict) -> dict:
         alloc_by_idx = {i: alloc_list[i] for i in range(len(delivs))}
 
     obligations, schedule = [], []
+    pit_dates: dict[str, str] = {}   # obligation_id -> exact point-in-time delivery date
     for i, d in enumerate(delivs):
         ob_id = f"{cid}-OB{i + 1}"
         if d.get("review"):
@@ -339,7 +359,9 @@ def process_contract(contract: dict) -> dict:
         })
         # Step 5: recognition schedule (included obligations only).
         if method == "point_in_time":
-            schedule.append({"month": start_m, "obligation_id": ob_id,
+            deliver_dt = _deliver_date(d)
+            pit_dates[ob_id] = deliver_dt
+            schedule.append({"month": month_key(deliver_dt), "obligation_id": ob_id,
                              "amount_cents": alloc, "method": "point_in_time"})
         else:
             ob_months = month_span(*_ob_window(d))
@@ -408,7 +430,8 @@ def process_contract(contract: dict) -> dict:
                 "obligation_id": e["obligation_id"],
             })
         else:
-            entry_date = contract["start_date"] if e["method"] == "point_in_time" else month_end(e["month"])
+            entry_date = pit_dates.get(e["obligation_id"], contract["start_date"]) \
+                if e["method"] == "point_in_time" else month_end(e["month"])
             journal.append({
                 "date": entry_date, "month": e["month"], "entry_type": "recognition",
                 "debit_account": "Deferred Revenue", "credit_account": "Revenue",
