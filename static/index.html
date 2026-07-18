@@ -85,6 +85,18 @@
   .resolvebox input, .resolvebox select { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; font-size: 13px; }
   .resolvebox .rtiming, .resolvebox .rdelivery { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
   .resolvebox input.rprice.missing { border-color: #d33; background: #fff0f0; }
+  .detailhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  #viewSrcBtn { background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 8px;
+                padding: 7px 14px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  #viewSrcBtn:hover { background: var(--border); }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center;
+           justify-content: center; z-index: 1000; padding: 24px; }
+  .modal-box { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; width: min(860px, 100%);
+               height: min(90vh, 100%); display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,.3); }
+  .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px;
+                border-bottom: 1px solid var(--border); font-weight: 600; }
+  #srcModalClose { background: none; border: none; font-size: 18px; cursor: pointer; color: var(--muted); line-height: 1; }
+  #srcFrame { flex: 1; width: 100%; border: none; background: #fff; }
   .resolvebox button { background: var(--ink); color: var(--lime); border: none; border-radius: 6px; padding: 6px 14px; font-weight: 600; cursor: pointer; }
 </style>
 </head>
@@ -168,8 +180,21 @@ obligations, price allocation, journal entries, deferred revenue, automated mont
   </div>
 
   <div class="card full" id="detail">
-    <h2 id="detailTitle"></h2>
+    <div class="detailhead">
+      <h2 id="detailTitle"></h2>
+      <button id="viewSrcBtn" style="display:none">📄 View contract</button>
+    </div>
     <div id="detailBody"></div>
+  </div>
+</div>
+
+<div id="srcModal" class="modal" style="display:none">
+  <div class="modal-box">
+    <div class="modal-head">
+      <span id="srcModalTitle">Source contract</span>
+      <button id="srcModalClose" title="Close">✕</button>
+    </div>
+    <iframe id="srcFrame" title="Source contract"></iframe>
   </div>
 </div>
 
@@ -351,6 +376,13 @@ function renderDetail(p) {
   el.classList.add("open");
   document.getElementById("detailTitle").textContent =
     `${p.contract_id} — ${p.customer} (${p.start_date} → ${p.end_date}, ${fmt(p.total_price)})`;
+  const srcBtn = document.getElementById("viewSrcBtn");
+  if (p.has_source) {
+    srcBtn.style.display = "";
+    srcBtn.onclick = () => openSource(p.contract_id, p.customer);
+  } else {
+    srcBtn.style.display = "none";
+  }
   const money = v => (v === null || v === undefined) ? "—" : fmt(v);
   let html = `
     <h3 style="margin:8px 0">Performance Obligations & Price Allocation</h3>
@@ -531,6 +563,21 @@ document.getElementById("uploadFile").addEventListener("change", async e => {
   }
   e.target.value = "";
 });
+function openSource(id, customer) {
+  document.getElementById("srcModalTitle").textContent = `Source contract — ${id}${customer ? " (" + customer + ")" : ""}`;
+  document.getElementById("srcFrame").src = `/api/contracts/${encodeURIComponent(id)}/source`;
+  document.getElementById("srcModal").style.display = "flex";
+}
+function closeSource() {
+  document.getElementById("srcModal").style.display = "none";
+  document.getElementById("srcFrame").src = "about:blank";
+}
+document.getElementById("srcModalClose").addEventListener("click", closeSource);
+document.getElementById("srcModal").addEventListener("click", e => {
+  if (e.target.id === "srcModal") closeSource();   // click backdrop to close
+});
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeSource(); });
+
 document.getElementById("runClose").addEventListener("click", runClose);
 document.getElementById("downloadCsv").addEventListener("click", () => {
   const month = document.getElementById("closeMonth").value;

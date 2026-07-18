@@ -62,6 +62,24 @@ VISITOR_COOKIE = "revrec_visitor"
 # a one-time reprocess of the stored seeds on the next boot.
 SEED_VERSION = "3"
 
+# Source contract documents. Seeds are served from their prose PDFs on disk;
+# visitor uploads store their original file bytes in the `sources` table so the
+# "View contract" panel works for uploads too (you can't resolve what you can't
+# read).
+SEED_PDF_DIR = os.path.join(BASE_DIR, "data", "seed_pdfs")
+SEED_PDF_BY_ID = {
+    "ORD-2601": "01_northstar_saas.pdf",
+    "ORD-2602": "02_ironclad_hardware.pdf",
+    "ORD-2603": "03_meridian_bundle.pdf",
+    "ORD-2604": "04_blueridge_support.pdf",
+    "ORD-2605": "05_vertex_partial.pdf",
+    "ORD-2606": "06_sterling_report.pdf",
+    "ORD-2607": "07_quantum_platform.pdf",
+    "ORD-2608": "08_nimbus_bundle.pdf",
+    "ORD-2609": "09_apex_three.pdf",
+    "ORD-2610": "10_sparrow_install.pdf",
+}
+
 
 # ---------------------------------------------------------------------------
 # Database
@@ -95,6 +113,19 @@ def init_db():
         )
     """)
     conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+    # Original uploaded contract documents (PDF bytes or pretty JSON), so the
+    # "View contract" panel can show what a visitor uploaded. Seeds are served
+    # from disk and are not stored here.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sources (
+            owner       TEXT NOT NULL,
+            contract_id TEXT NOT NULL,
+            blob        BLOB NOT NULL,
+            name        TEXT,
+            mime        TEXT,
+            PRIMARY KEY (owner, contract_id)
+        )
+    """)
 
     seed_path = os.path.join(BASE_DIR, "data", "seed_contracts.json")
     seed_bytes = open(seed_path, "rb").read()
@@ -199,12 +230,15 @@ def list_contracts():
     seed (deleting it reverts to the shared flagged seed)."""
     seed_ids = {r["contract_id"] for r in get_db().execute(
         "SELECT contract_id FROM contracts WHERE owner='seed'").fetchall()}
+    src_ids = {r["contract_id"] for r in get_db().execute(
+        "SELECT contract_id FROM sources WHERE owner=?", (visitor_id(),)).fetchall()}
     out = []
     for r in visible_rows():
         p = json.loads(r["processed_json"])
         own = r["owner"] != "seed"
         p["deletable"] = own
         p["is_override"] = own and r["contract_id"] in seed_ids
+        p["has_source"] = p["contract_id"] in SEED_PDF_BY_ID or p["contract_id"] in src_ids
         out.append(p)
     return jsonify({"contracts": out})
 
@@ -213,8 +247,51 @@ def list_contracts():
 def get_contract(contract_id):
     for p in load_scope():
         if p["contract_id"] == contract_id:
+            src = get_db().execute("SELECT 1 FROM sources WHERE owner=? AND contract_id=?",
+                                   (visitor_id(), contract_id)).fetchone()
+            p["has_source"] = contract_id in SEED_PDF_BY_ID or src is not None
             return jsonify(p)
     return jsonify({"error": f"Contract {contract_id} not found"}), 404
+
+
+def _pdf_text(source) -> str:
+    """Extract readable text from a PDF (path or file-like)."""
+    from pypdf import PdfReader
+    reader = PdfReader(source)
+    return "\n".join((pg.extract_text() or "") for pg in reader.pages).strip()
+
+
+def _source_html(contract_id: str, text: str) -> str:
+    """Render contract text as a document-styled HTML page. Served as HTML (not
+    a raw PDF) so it renders inline in every browser — a raw PDF iframe depends
+    on a browser PDF plugin and can silently fail to a black frame or download."""
+    esc = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<style>body{margin:0;background:#f4f4f5;font-family:Georgia,'Times New Roman',serif;color:#111}"
+        ".page{max-width:720px;margin:24px auto;background:#fff;padding:44px 52px;"
+        "box-shadow:0 1px 8px rgba(0,0,0,.15);white-space:pre-wrap;line-height:1.55;font-size:15px}"
+        "</style></head><body><div class='page'>" + esc + "</div></body></html>"
+    )
+
+
+@app.route("/api/contracts/<contract_id>/source")
+def contract_source(contract_id):
+    """Serve the contract document for the 'View contract' panel, rendered as
+    HTML text. A visitor's own uploaded file takes precedence; otherwise fall
+    back to the seed's prose PDF on disk (also covers a resolved seed override)."""
+    row = get_db().execute("SELECT blob, mime FROM sources WHERE owner=? AND contract_id=?",
+                           (visitor_id(), contract_id)).fetchone()
+    if row:
+        if (row["mime"] or "").startswith("application/pdf"):
+            text = _pdf_text(io.BytesIO(row["blob"]))
+        else:
+            text = row["blob"].decode("utf-8", "replace")   # JSON upload
+        return Response(_source_html(contract_id, text), mimetype="text/html")
+    if contract_id in SEED_PDF_BY_ID:
+        text = _pdf_text(os.path.join(SEED_PDF_DIR, SEED_PDF_BY_ID[contract_id]))
+        return Response(_source_html(contract_id, text), mimetype="text/html")
+    return jsonify({"error": "No source document available for this contract."}), 404
 
 
 @app.route("/api/contracts", methods=["POST"])
@@ -225,18 +302,25 @@ def upload_contract():
     pick it up automatically because they sum the cached per-contract
     results — no reprocessing of existing contracts.
     """
+    # Capture the original document bytes so we can show it back in "View
+    # contract" — you can't resolve a flagged contract without reading it.
+    src_blob = src_name = src_mime = None
     try:
         if "file" in request.files:
             f = request.files["file"]
             name = (f.filename or "").lower()
+            raw_bytes = f.read()
+            src_name = f.filename or "contract"
             if name.endswith(".pdf"):
                 # Auto-detects structured vs prose and routes accordingly;
                 # both produce the same internal contract schema.
-                payload = extract_contract(f, name)
+                payload = extract_contract(io.BytesIO(raw_bytes), name)
+                src_blob, src_mime = raw_bytes, "application/pdf"
             else:
-                payload = json.load(f)
+                payload = json.loads(raw_bytes)
         else:
             payload = request.get_json(force=True)
+            src_name = "contract.json"
     except ContractValidationError as e:
         return jsonify({"error": str(e)}), 400
     except Exception:
@@ -258,11 +342,21 @@ def upload_contract():
 
     add_rationales(processed)
 
+    # For a JSON upload (or raw JSON body) there's no document to show, so keep
+    # the pretty-printed structured contract as the viewable source.
+    if src_blob is None:
+        src_blob = json.dumps(payload, indent=2).encode()
+        src_mime = "text/plain; charset=utf-8"
+
     db = get_db()
     db.execute(
         "INSERT INTO contracts VALUES (?, ?, ?, ?, ?)",
         (visitor_id(), cid, json.dumps(payload), json.dumps(processed),
          datetime.now(timezone.utc).isoformat()),
+    )
+    db.execute(
+        "INSERT OR REPLACE INTO sources (owner, contract_id, blob, name, mime) VALUES (?, ?, ?, ?, ?)",
+        (visitor_id(), cid, src_blob, src_name, src_mime),
     )
     db.commit()
     return jsonify(processed), 201
@@ -279,6 +373,8 @@ def delete_contract(contract_id):
     db = get_db()
     cur = db.execute("DELETE FROM contracts WHERE owner=? AND contract_id=?",
                      (visitor_id(), contract_id))
+    db.execute("DELETE FROM sources WHERE owner=? AND contract_id=?",
+               (visitor_id(), contract_id))
     db.commit()
     if cur.rowcount == 0:
         is_seed = db.execute("SELECT 1 FROM contracts WHERE owner='seed' AND contract_id=?",
