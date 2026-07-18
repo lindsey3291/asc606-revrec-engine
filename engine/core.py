@@ -490,11 +490,20 @@ def process_contract(contract: dict) -> dict:
             f"(ASC 606 Step 4). No obligation recognizes more than its allocated share."
         )
 
+    # Displayed term end: when an obligation's service window (or a point-in-time
+    # delivery date) recognizes past the contract's stated end month, show the
+    # term through the actual recognition horizon so the term can't read as a
+    # single day while 12 months of revenue spread beneath it. Contracts that
+    # don't extend keep their exact stated end date (day preserved).
+    display_end_date = contract["end_date"]
+    if _month_index(months[-1]) > _month_index(end_m):
+        display_end_date = month_end(months[-1])
+
     return {
         "contract_id": cid,
         "customer": contract["customer"],
         "start_date": contract["start_date"],
-        "end_date": contract["end_date"],
+        "end_date": display_end_date,
         "total_price": _dollars(total_cents + mod_added_cents),
         "recognized_amount": _dollars(recognized_total_cents + mod_added_cents),
         "excluded_amount": _dollars(excluded_cents),
