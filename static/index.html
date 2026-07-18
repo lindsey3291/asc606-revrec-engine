@@ -487,14 +487,22 @@ async function resolveContract(id) {
       + `will stay flagged and excluded from the totals (highlighted in red).`);
   }
 
-  // (2) Prices exceed the contract price: flag and have the user verify intent.
-  if (total > 0 && enteredSum > total) {
-    const over = enteredSum - total, pct = over / total * 100;
-    warnings.push(filled === rows.length
-      ? `Standalone prices sum to $${enteredSum.toLocaleString()} vs. the $${total.toLocaleString()} contract price — `
-        + `a ${pct.toFixed(0)}% bundle discount ($${over.toLocaleString()}), allocated proportionally (ASC 606 Step 4).`
-      : `The prices entered ($${enteredSum.toLocaleString()}) already exceed the whole contract `
-        + `($${total.toLocaleString()}) by $${over.toLocaleString()}, with obligations still unpriced — this looks like a typo.`);
+  // (2) Prices don't match the contract price: have the user verify intent.
+  if (total > 0) {
+    const diff = enteredSum - total, pct = Math.abs(diff) / total * 100;
+    if (filled === rows.length && Math.abs(diff) > 0.005) {
+      // Fully resolved but standalone prices don't tie to the contract — a
+      // bundle discount (over) or premium (under), spread proportionally.
+      const kind = diff > 0 ? "discount" : "premium";
+      warnings.push(`Standalone prices sum to $${enteredSum.toLocaleString()} vs. the $${total.toLocaleString()} `
+        + `contract price — a ${pct.toFixed(0)}% bundle ${kind} ($${Math.abs(diff).toLocaleString()}), `
+        + `allocated proportionally across the obligations (ASC 606 Step 4).`);
+    } else if (filled < rows.length && diff > 0) {
+      // Still partly unpriced yet already over the whole contract — a likely typo.
+      // (Summing UNDER while partly unpriced is expected, so it isn't flagged.)
+      warnings.push(`The prices entered ($${enteredSum.toLocaleString()}) already exceed the whole contract `
+        + `($${total.toLocaleString()}) by $${diff.toLocaleString()}, with obligations still unpriced — this looks like a typo.`);
+    }
   }
 
   if (warnings.length) {
