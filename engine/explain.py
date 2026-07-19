@@ -156,9 +156,17 @@ def assess_obligation(ob: dict, siblings: list[dict] | None = None) -> dict:
 # ---------------------------------------------------------------------------
 
 def _citation_for(ob: dict, processed: dict) -> str:
+    # The rules know only over-time vs point-in-time; WHICH of the three
+    # over-time criteria applies is a reading judgment stated in the rationale
+    # (criterion 1 continuous benefit, 2 customer-controlled asset, or 3 no
+    # alternative use + right to payment). So the deterministic citation names
+    # the paragraph and the over-time determination without pinning a specific
+    # criterion it can't verify — otherwise it would contradict a rationale that
+    # correctly reasons criterion 2 or 3.
     if ob["method"] == "over_time":
-        return ("Step 5, over-time criterion 1 (ASC 606-10-25-27): the customer "
-                "simultaneously receives and consumes the benefit as the company performs")
+        return ("Step 5, over-time recognition (ASC 606-10-25-27): the obligation satisfies one "
+                "of the three over-time criteria; the specific criterion applied is identified in "
+                "the rationale")
     return ("Step 5, point-in-time recognition: none of the three over-time criteria are met; "
             "control transfers at delivery/acceptance")
 
