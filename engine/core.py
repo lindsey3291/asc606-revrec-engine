@@ -645,19 +645,21 @@ def month_end_close_batch(processed_list, close_month: str) -> dict:
                 ),
             })
 
-        # Control 2: contract is active with over-time obligations but no
-        # recognition entry was generated for this month.
-        has_over_time = any(ob["method"] == "over_time" for ob in p["obligations"])
-        if has_over_time and start_m <= close_month <= end_m:
-            if not any(e["contract_id"] == p["contract_id"] and e["entry_type"] == "recognition"
-                       for e in entries):
-                flags.append({
-                    "contract_id": p["contract_id"], "severity": "error",
-                    "message": (
-                        f"Active over-time contract has no recognition entry for {close_month} — "
-                        "the monthly entry may have been missed."
-                    ),
-                })
+        # Control 2: an over-time obligation has a recognition GAP — the close
+        # month falls strictly inside the span it recognizes across, but no
+        # entry exists for that month. Anchored to the obligation's actual
+        # recognition months (not the contract term), so a service window that
+        # legitimately hasn't started (or has ended) isn't a false "missed
+        # entry" — only a true hole in an active schedule is flagged.
+        ot_months = sorted({s["month"] for s in p["schedule"] if s["method"] == "over_time"})
+        if ot_months and ot_months[0] <= close_month <= ot_months[-1] and close_month not in ot_months:
+            flags.append({
+                "contract_id": p["contract_id"], "severity": "error",
+                "message": (
+                    f"Over-time contract has a recognition gap — no entry for {close_month} "
+                    "inside its active schedule; the monthly entry may have been missed."
+                ),
+            })
 
     entries.sort(key=lambda e: (e["contract_id"], e["obligation_id"] or ""))
     return {
