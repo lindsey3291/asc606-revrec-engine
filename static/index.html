@@ -145,13 +145,6 @@ obligations, price allocation, journal entries, deferred revenue, automated mont
   </div>
 </div>
 
-<div class="grid">
-  <div class="card full">
-    <h2>Needs Review</h2>
-    <p class="sub" style="margin-bottom:8px">Obligations whose descriptions don't map cleanly to the reference guide's criteria — or that touch an out-of-scope area — are flagged here for human review instead of being silently auto-processed.</p>
-    <div id="reviewList"></div>
-  </div>
-</div>
 
 <div class="grid">
   <div class="card full">
@@ -232,7 +225,6 @@ async function loadAll() {
   renderMethod(agg.recognized_by_method);
   renderRPO(rpo);
   renderTable();
-  renderReview();
   if (selectedId) { const p = contracts.find(x => x.contract_id === selectedId); if (p) renderDetail(p); }
 }
 
@@ -361,29 +353,6 @@ async function deleteContract(id) {
   } catch (err) {
     status.className = "err"; status.textContent = "✗ " + err.message;
   }
-}
-
-function renderReview() {
-  const items = contracts.flatMap(p =>
-    (p.needs_review || []).map(r => ({ ...r, contract_id: p.contract_id, customer: p.customer })));
-  // Collapse obligations that share the same contract AND reason into a single
-  // entry (an unpriced bundle's obligations all carry the identical reason), so
-  // the list doesn't repeat the same paragraph once per obligation.
-  const groups = {}, order = [];
-  for (const r of items) {
-    const key = r.contract_id + "|" + r.reason;
-    if (!groups[key]) { groups[key] = { contract_id: r.contract_id, customer: r.customer, reason: r.reason, obs: [] }; order.push(key); }
-    groups[key].obs.push(r);
-  }
-  document.getElementById("reviewList").innerHTML = order.length
-    ? order.map(k => {
-        const g = groups[k];
-        const label = g.obs.length === 1
-          ? `${g.obs[0].obligation_id}, ${g.obs[0].type}`
-          : `${g.obs.length} obligations (${g.obs.map(o => o.type).join(", ")})`;
-        return `<div class="flag"><b>${g.contract_id}</b> (${g.customer}) — ${label}: ${g.reason}</div>`;
-      }).join("")
-    : `<div class="ok">✓ All obligations classified with sufficient confidence — nothing is awaiting review.</div>`;
 }
 
 function renderDetail(p) {
