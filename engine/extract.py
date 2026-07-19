@@ -200,6 +200,22 @@ def _to_internal(data: dict) -> dict:
     """Translate the extractor's output into the exact internal contract dict
     (identical shape to a structured/JSON contract). This is a pure
     translation step — no parallel data model."""
+    # If the file isn't actually a contract, the reader comes back with empty
+    # core fields. Surface one clear message instead of a raw date-parse error
+    # ("Invalid date '' — expected YYYY-MM-DD") from validation downstream.
+    try:
+        price = float(data.get("total_price") or 0)
+    except (TypeError, ValueError):
+        price = 0
+    if (not (data.get("customer") or "").strip()
+            or not (data.get("start_date") or "").strip()
+            or not (data.get("end_date") or "").strip()
+            or price <= 0
+            or not data.get("deliverables")):
+        raise ContractValidationError(
+            "This file doesn't look like a contract — the reader couldn't find a customer, "
+            "contract dates, and a positive total price. Please upload a contract PDF "
+            "(order form, SOW, or MSA excerpt) or a JSON contract.")
     delivs = []
     for d in data["deliverables"]:
         item = {
