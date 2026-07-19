@@ -47,6 +47,9 @@
     border-radius: 8px; padding: 5px 12px; font-size: 13px; cursor: pointer;
   }
   .filters button.active { background: var(--ink); border-color: var(--ink); color: var(--lime); }
+  #contractTable thead th[data-sort] { cursor: pointer; user-select: none; white-space: nowrap; }
+  #contractTable thead th[data-sort]:hover { color: var(--ink); }
+  #contractTable thead th .arrow { font-size: 10px; color: var(--muted); }
   #uploadBtn { background: var(--ink); color: var(--lime); border-color: var(--ink); font-weight: 600; }
   #runClose { background: var(--ink); color: #fff; border-color: var(--ink); }
   .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
@@ -165,8 +168,14 @@ obligations, price allocation, journal entries, deferred revenue, automated mont
     </div>
     <div class="scroll"><table id="contractTable">
       <thead><tr>
-        <th>ID</th><th>Customer</th><th>Category</th><th>Term</th>
-        <th class="num">Total Price</th><th class="num">Obligations</th><th>Methods</th><th></th>
+        <th data-sort="contract_id">ID<span class="arrow"></span></th>
+        <th data-sort="customer">Customer<span class="arrow"></span></th>
+        <th data-sort="category">Category<span class="arrow"></span></th>
+        <th data-sort="start_date">Term<span class="arrow"></span></th>
+        <th class="num" data-sort="total_price">Total Price<span class="arrow"></span></th>
+        <th class="num" data-sort="obligations">Obligations<span class="arrow"></span></th>
+        <th data-sort="methods">Methods<span class="arrow"></span></th>
+        <th></th>
       </tr></thead>
       <tbody></tbody>
     </table></div>
@@ -207,6 +216,16 @@ obligations, price allocation, journal entries, deferred revenue, automated mont
 const fmt = n => "$" + n.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const fmt0 = n => "$" + Math.round(n).toLocaleString("en-US");
 let contracts = [], filter = "all", selectedId = null;
+let sortKey = "contract_id", sortDir = 1;   // 1 = ascending, -1 = descending
+const SORT_ACCESSORS = {
+  contract_id: p => p.contract_id,
+  customer:    p => p.customer.toLowerCase(),
+  category:    p => p.category,
+  start_date:  p => p.start_date,
+  total_price: p => p.total_price,
+  obligations: p => p.obligations.length,
+  methods:     p => p.obligations.map(o => o.method).sort().join(","),
+};
 let drChart, methodChart, rpoChart;
 
 Chart.defaults.color = "#6f6d66";
@@ -308,6 +327,15 @@ function methodsCell(p) {
 function renderTable() {
   const tbody = document.querySelector("#contractTable tbody");
   const rows = contracts.filter(p => filter === "all" || p.category === filter);
+  const acc = SORT_ACCESSORS[sortKey] || SORT_ACCESSORS.contract_id;
+  rows.sort((a, b) => {
+    const va = acc(a), vb = acc(b);
+    return (va < vb ? -1 : va > vb ? 1 : 0) * sortDir;
+  });
+  document.querySelectorAll("#contractTable thead th[data-sort]").forEach(th => {
+    th.querySelector(".arrow").textContent =
+      th.dataset.sort === sortKey ? (sortDir === 1 ? " ▲" : " ▼") : "";
+  });
   tbody.innerHTML = rows.map(p => `
     <tr class="clickable ${p.contract_id === selectedId ? "selected" : ""}" data-id="${p.contract_id}">
       <td>${p.contract_id}</td><td>${p.customer}</td>
@@ -531,6 +559,15 @@ document.getElementById("filters").addEventListener("click", e => {
   filter = e.target.dataset.f;
   document.querySelectorAll("#filters button").forEach(b => b.classList.toggle("active", b === e.target));
   renderTable();
+});
+
+// Click a column header to sort; click the same header again to reverse.
+document.querySelectorAll("#contractTable thead th[data-sort]").forEach(th => {
+  th.addEventListener("click", () => {
+    const key = th.dataset.sort;
+    if (sortKey === key) sortDir *= -1; else { sortKey = key; sortDir = 1; }
+    renderTable();
+  });
 });
 
 document.getElementById("uploadBtn").addEventListener("click", () => document.getElementById("uploadFile").click());
