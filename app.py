@@ -60,7 +60,7 @@ app = Flask(__name__, static_folder="static")
 VISITOR_COOKIE = "revrec_visitor"
 # Bump when engine/explain logic changes the seeds' processed output, to force
 # a one-time reprocess of the stored seeds on the next boot.
-SEED_VERSION = "4"
+SEED_VERSION = "5"
 
 # Source contract documents. Seeds are served from their prose PDFs on disk;
 # visitor uploads store their original file bytes in the `sources` table so the
@@ -77,7 +77,7 @@ SEED_PDF_BY_ID = {
     "ORD-2607": "07_quantum_platform.pdf",
     "ORD-2608": "08_nimbus_bundle.pdf",
     "ORD-2609": "09_apex_three.pdf",
-    "ORD-2610": "10_sparrow_install.pdf",
+    "ORD-2610": "10_beacon_usage.pdf",
 }
 
 

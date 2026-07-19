@@ -202,17 +202,25 @@
   },
   {
     "contract_id": "ORD-2610",
-    "customer": "Lakeside Foods",
-    "start_date": "2026-02-04",
-    "end_date": "2026-02-04",
-    "total_price": 15000,
+    "customer": "Castle Payments",
+    "start_date": "2026-03-01",
+    "end_date": "2027-02-28",
+    "total_price": 36000,
     "deliverables": [
       {
-        "type": "equipment",
-        "description": "Refrigeration equipment delivered and installed within fifteen (15) days of the purchase order",
-        "standalone_price_estimate": 15000,
-        "delivery_type": "one_time"
+        "type": "platform_access",
+        "description": "Access to the Beacon API platform on a continuous basis for a period of twelve (12) months",
+        "standalone_price_estimate": 36000,
+        "delivery_type": "over_time"
       }
-    ]
+    ],
+    "variable_consideration": {
+      "description": "Per-transaction usage fees billed monthly in arrears based on actual API call volume",
+      "monthly_actuals": {
+        "2026-03": 1850, "2026-04": 2340, "2026-05": 2100, "2026-06": 2780,
+        "2026-07": 3120, "2026-08": 2950, "2026-09": 3400, "2026-10": 3680,
+        "2026-11": 3200, "2026-12": 4100, "2027-01": 3750, "2027-02": 4300
+      }
+    }
   }
 ]

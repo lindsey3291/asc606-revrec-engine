@@ -161,15 +161,22 @@ make("09_apex_three.pdf", "Apex Systems, Inc.",
       ("3. Effective Date", "This Agreement is executed on June 1, 2026.")],
      "Apex Systems, Inc.", "Grandview Health")
 
-# 10 — Simple delivery/installation project (clean point-in-time baseline).
-make("10_sparrow_install.pdf", "Sparrow Equipment Co.",
-     "Purchase Order - Equipment and Installation",
-     [("1. Goods and Installation", "Vendor shall deliver and install refrigeration equipment at "
-       "Customer's facility. Delivery and installation shall be completed within fifteen (15) days of "
-       "this purchase order, on or about February 4, 2026."),
-      ("2. Price", "The total price for the equipment and installation is fifteen thousand dollars "
-       "($15,000), due upon completion of installation.")],
-     "Sparrow Equipment Co.", "Lakeside Foods")
+# 10 — Usage-based platform: fixed subscription + variable per-transaction fees
+# (variable consideration; fixed part recognized over time, usage recognized as
+# billed and excluded from the RPO forecast).
+make("10_beacon_usage.pdf", "Beacon API Systems, Inc.",
+     "Order Form - Platform Subscription and Usage",
+     [("1. Term", "This Order Form is effective March 1, 2026 and continues for a period of "
+       "twelve (12) months, ending February 28, 2027."),
+      ("2. Platform Access", "Vendor shall provide Customer continuous access to the Beacon API "
+       "platform throughout the Term. Customer's applications may call the platform on a continuous "
+       "basis for the duration of the Term."),
+      ("3. Fees", "Customer shall pay a fixed platform subscription fee of thirty-six thousand "
+       "dollars ($36,000) for the twelve-month Term, payable annually in advance. In addition to the "
+       "fixed fee, Customer shall pay per-transaction usage fees based on actual API call volume each "
+       "month; usage fees are variable, are billed monthly in arrears based on metered usage, and are "
+       "not fixed or guaranteed in advance.")],
+     "Beacon API Systems, Inc.", "Castle Payments")
 
 # The dashboard's downloadable sample is the simple, unambiguous SaaS contract.
 shutil.copyfile(os.path.join(OUT_DIR, "01_northstar_saas.pdf"),
