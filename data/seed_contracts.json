@@ -215,11 +215,9 @@
       }
     ],
     "variable_consideration": {
-      "description": "Per-transaction usage fees billed monthly in arrears based on actual API call volume",
+      "description": "Per-transaction usage fees billed monthly in arrears based on actual API call volume. Actuals are recorded only through the current period (usage is recognized as incurred, never projected forward), which is why it is excluded from the RPO forecast.",
       "monthly_actuals": {
-        "2026-03": 1850, "2026-04": 2340, "2026-05": 2100, "2026-06": 2780,
-        "2026-07": 3120, "2026-08": 2950, "2026-09": 3400, "2026-10": 3680,
-        "2026-11": 3200, "2026-12": 4100, "2027-01": 3750, "2027-02": 4300
+        "2026-03": 1850, "2026-04": 2340, "2026-05": 2100, "2026-06": 2780, "2026-07": 3120
       }
     }
   }
